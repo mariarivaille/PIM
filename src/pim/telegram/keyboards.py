@@ -1,4 +1,5 @@
 import html
+from datetime import date, timedelta
 
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup
@@ -8,6 +9,7 @@ from pim.core.models import ItemList, ListItem, Memory, MemoryKind, MemorySource
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
 from pim.learning.timing import MIN_HOUR_SAMPLES, MIN_SNOOZE_SAMPLES, WINDOW_DAYS, TimeProfile
 from pim.lists.matching import normalize
+from pim.planning.day import Plan
 from pim.reminders.dates import UpcomingDate, days_until_text
 from pim.reminders.digest import Digest
 from pim.reminders.review import Review
@@ -79,6 +81,47 @@ def date_alert_text(up: UpcomingDate) -> str:
     if up.days == 1:
         return f"{icon} <b>Завтра, {when}</b> — {what}"
     return f"{icon} <b>{days_until_text(up.days).capitalize()}, {when}</b> — {what}\nПодготовиться заранее?"
+
+
+class PlanAction(CallbackData, prefix="p"):
+    action: str  # make | apply | cancel
+    plan_id: int = 0
+    day: int = 0  # YYYYMMDD — для make
+
+
+def plan_make_kb(day: date) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🗓 Спланировать день", callback_data=PlanAction(action="make", day=int(day.strftime("%Y%m%d"))))
+    return kb.as_markup()
+
+
+def plan_message(plan: Plan, tz: str) -> tuple[str, InlineKeyboardMarkup | None]:
+    """План дня: что уже стоит, что предлагаю и что не влезло; применяется только по кнопке."""
+    title = f"🗓 <b>План на {WEEKDAYS_RU[plan.day.weekday()]} {plan.day:%d.%m}</b>"
+    if plan.empty and not plan.skipped:
+        return (f"{title}\nПланировать нечего: все дела уже со временем, а без срока и просроченных нет 👌", None)
+    parts = [title]
+    if plan.comment:
+        parts.append(html.escape(plan.comment))
+    if plan.fixed:
+        parts.append("\n<b>Уже стоит:</b>")
+        parts += [f"• {to_local(t.due_at, tz):%H:%M} {html.escape(t.title)}" for t in plan.fixed]
+    if plan.items:
+        parts.append("\n<b>Предлагаю:</b>")
+        for i in plan.items:
+            start = to_local(i.at, tz)
+            end = start + timedelta(minutes=i.minutes)
+            parts.append(f"• {start:%H:%M}–{end:%H:%M} {html.escape(i.task.title)}")
+    if plan.skipped:
+        parts.append("\n<b>Не влезло:</b>")
+        parts += [f"• {html.escape(t.title)}" for t in plan.skipped]
+    if not plan.items:
+        return _fit(parts), None
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Поставить напоминания", callback_data=PlanAction(action="apply", plan_id=plan.id))
+    kb.button(text="✖️ Не надо", callback_data=PlanAction(action="cancel", plan_id=plan.id))
+    kb.adjust(1)
+    return _fit(parts), kb.as_markup()
 
 
 class ListAction(CallbackData, prefix="l"):

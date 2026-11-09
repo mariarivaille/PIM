@@ -182,3 +182,16 @@ class TaskEvent(Base):
     kind: Mapped[TaskEventKind] = mapped_column(String(16))
     at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
     minutes: Mapped[int | None] = mapped_column()
+
+
+class DayPlan(Base):
+    """Предложенный план дня — ждёт подтверждения кнопкой «Поставить напоминания»."""
+
+    __tablename__ = "day_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    day: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD, локальная дата
+    items: Mapped[str] = mapped_column(Text)  # JSON: [{"task_id", "at" (ISO UTC), "minutes"}]
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

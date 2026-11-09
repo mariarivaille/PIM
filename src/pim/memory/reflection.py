@@ -5,7 +5,6 @@
 пользователю при этом не замедляются.
 """
 
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -16,6 +15,7 @@ from pim.core.models import ChatMessage, Memory, MemoryKind, MemorySource, User,
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
 from pim.llm.base import LLMProvider, Message
+from pim.llm.jsonout import extract_json
 
 log = logging.getLogger(__name__)
 
@@ -82,14 +82,7 @@ def _render_memories(memories: list[Memory]) -> str:
 
 
 def parse_reflection(raw: str) -> dict:
-    """JSON из ответа модели; модели любят обрамлять его текстом или ```json — вырезаем фигурные скобки."""
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end <= start:
-        raise ValueError("в ответе нет JSON")
-    data = json.loads(raw[start:end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("JSON — не объект")
-    return data
+    return extract_json(raw)
 
 
 class Reflector:

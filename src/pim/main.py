@@ -7,6 +7,7 @@ from pim.core.db import init_db, make_engine, make_sessionmaker
 from pim.core.repository import Repository
 from pim.llm.factory import make_provider
 from pim.memory.reflection import Reflector
+from pim.planning.day import DayPlanner
 from pim.reminders.scheduler import ReminderScheduler
 from pim.stt.factory import make_transcriber
 from pim.telegram.bot import TelegramNotifier, make_bot, make_dispatcher, setup_commands
@@ -33,7 +34,8 @@ async def main() -> None:
 
     history = History(repo, settings.history_size, ttl_seconds=settings.history_ttl_minutes * 60)
     llm = make_provider(settings)
-    agent = Agent(llm, repo, history, max_memories=settings.max_memories)
+    planner = DayPlanner(llm, repo)
+    agent = Agent(llm, repo, history, max_memories=settings.max_memories, planner=planner)
     transcriber = make_transcriber(settings)
     bot = make_bot(settings)
     dp = make_dispatcher(agent, repo, settings, transcriber)

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from pim.core.models import (
     ChatMessage,
     DateAlert,
+    DayPlan,
     ItemList,
     ListItem,
     Memory,
@@ -301,6 +302,25 @@ class Repository:
         async with self._sm() as s, s.begin():
             res = await s.execute(delete(ListItem).where(ListItem.list_id == list_id, ListItem.done.is_(True)))
             return res.rowcount
+
+    # --- план дня ---
+
+    async def save_day_plan(self, user_id: int, day: str, items: str) -> DayPlan:
+        async with self._sm() as s, s.begin():
+            plan = DayPlan(user_id=user_id, day=day, items=items)
+            s.add(plan)
+        return plan
+
+    async def get_day_plan(self, user_id: int, plan_id: int) -> DayPlan | None:
+        async with self._sm() as s:
+            plan = await s.get(DayPlan, plan_id)
+            return plan if plan and plan.user_id == user_id else None
+
+    async def mark_plan_applied(self, plan_id: int) -> None:
+        async with self._sm() as s, s.begin():
+            plan = await s.get(DayPlan, plan_id)
+            if plan:
+                plan.applied_at = utcnow()
 
     # --- рефлексия: какую переписку ещё не разбирали ---
 

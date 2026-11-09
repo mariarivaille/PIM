@@ -12,7 +12,15 @@ from pim.reminders.dates import UpcomingDate
 from pim.reminders.review import Review
 from pim.stt.base import Transcriber
 from pim.telegram.handlers import make_router
-from pim.telegram.keyboards import date_alert_kb, date_alert_text, format_digest, reminder_kb, review_messages, task_card
+from pim.telegram.keyboards import (
+    date_alert_kb,
+    date_alert_text,
+    format_digest,
+    plan_make_kb,
+    reminder_kb,
+    review_messages,
+    task_card,
+)
 
 
 class AllowlistMiddleware(BaseMiddleware):
@@ -37,7 +45,9 @@ class TelegramNotifier:
         )
 
     async def send_digest(self, user: User, digest: Digest) -> None:
-        await self._bot.send_message(user.chat_id, format_digest(digest, user.timezone))
+        # есть дела без времени или просроченные — предлагаем разложить их по дню
+        kb = plan_make_kb(digest.day.date()) if digest.undated or digest.overdue else None
+        await self._bot.send_message(user.chat_id, format_digest(digest, user.timezone), reply_markup=kb)
 
     async def send_date_alert(self, user: User, upcoming: UpcomingDate) -> None:
         await self._bot.send_message(user.chat_id, date_alert_text(upcoming), reply_markup=date_alert_kb(upcoming))
@@ -52,6 +62,7 @@ COMMANDS = [
     BotCommand(command="tasks", description="Список дел"),
     BotCommand(command="lists", description="Списки: покупки, в поездку…"),
     BotCommand(command="digest", description="План на сегодня"),
+    BotCommand(command="plan", description="Спланировать день"),
     BotCommand(command="review", description="Разбор: что переносим?"),
     BotCommand(command="memory", description="Что я о тебе знаю"),
     BotCommand(command="habits", description="Твои привычки по времени"),
