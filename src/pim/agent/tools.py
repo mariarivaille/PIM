@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
 
-from pim.core.models import Memory, MemoryKind, MemorySource, Task, User, utcnow
+from pim.core.models import ItemList, Memory, MemoryKind, MemorySource, Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import (
     DAY_KEYWORDS,
@@ -25,6 +25,7 @@ from pim.core.timeutils import (
     resolve_day_time,
     to_local,
 )
+from pim.lists.matching import display_name, match_items, match_list, normalize
 from pim.llm.base import ToolSpec
 from pim.reminders.digest import parse_hhmm
 
@@ -48,6 +49,8 @@ class ToolContext:
     asked_for_time: bool = False
     # от какого момента считать «завтра», «через час»; None = сейчас (для пересланных — дата отправки)
     reference_time: datetime | None = None
+    # id списков, изменённых или открытых за ход — телеграм-слой покажет их с чекбоксами
+    lists_touched: list[int] = field(default_factory=list)
     # текст сообщения пользователя и предыдущий ответ бота: по ним проверяем, просил ли он что-то запомнить
     user_text: str = ""
     prev_assistant: str = ""
@@ -389,6 +392,81 @@ async def forget(ctx: ToolContext, number: int) -> dict:
     return {"forgotten": memory.content}
 
 
+# --- списки ---
+
+MAX_ITEM_CHARS = 200
+
+
+def _items_arg(items: Any) -> list[str]:
+    """Модель обычно шлёт массив, но бывает и строка «молоко, хлеб и яйца»."""
+    if isinstance(items, str):
+        items = re.split(r",(?!\d)|[;\n]|\s+и\s+", items)  # «молоко 2,5%» не режем
+    return [str(i).strip()[:MAX_ITEM_CHARS] for i in items or [] if str(i).strip()]
+
+
+async def _find_list(ctx: ToolContext, name: str) -> ItemList:
+    lists = [lst for lst, _, _ in await ctx.repo.user_lists(ctx.user.id)]
+    lst = match_list(lists, name)
+    if lst is None:
+        known = ", ".join(f"«{l.name}»" for l in lists) or "списков пока нет"
+        raise ToolError(f"списка «{name}» нет. Есть: {known}")
+    return lst
+
+
+async def _list_view(ctx: ToolContext, lst: ItemList) -> dict[str, Any]:
+    items = await ctx.repo.list_items(lst.id)
+    if lst.id not in ctx.lists_touched:
+        ctx.lists_touched.append(lst.id)
+    return {"list": lst.name, "items": [{"text": i.text, "done": i.done} for i in items]}
+
+
+async def add_to_list(ctx: ToolContext, list: str, items: Any) -> dict:
+    texts = _items_arg(items)
+    if not texts:
+        raise ToolError("нечего добавлять: items пустой")
+    lists = [lst for lst, _, _ in await ctx.repo.user_lists(ctx.user.id)]
+    lst = match_list(lists, list)
+    created = lst is None
+    if created:
+        lst = await ctx.repo.create_list(ctx.user.id, display_name(list))
+    open_items = [i for i in await ctx.repo.list_items(lst.id) if not i.done]
+    already = {normalize(i.text) for i in open_items}
+    new, duplicates = [], []
+    for text in texts:
+        (duplicates if normalize(text) in already else new).append(text)
+        already.add(normalize(text))
+    await ctx.repo.add_items(lst.id, new)
+    view = await _list_view(ctx, lst)
+    return {**view, "created_list": created, "added": new, "already_there": duplicates}
+
+
+async def check_off(ctx: ToolContext, list: str, items: Any) -> dict:
+    lst = await _find_list(ctx, list)
+    open_items = [i for i in await ctx.repo.list_items(lst.id) if not i.done]
+    found, missing = match_items(open_items, _items_arg(items))
+    await ctx.repo.set_items_done(lst.id, [i.id for i in found], True)
+    return {**await _list_view(ctx, lst), "checked": [i.text for i in found], "not_found": missing}
+
+
+async def remove_from_list(ctx: ToolContext, list: str, items: Any) -> dict:
+    lst = await _find_list(ctx, list)
+    found, missing = match_items(await ctx.repo.list_items(lst.id), _items_arg(items))
+    await ctx.repo.remove_items(lst.id, [i.id for i in found])
+    return {**await _list_view(ctx, lst), "removed": [i.text for i in found], "not_found": missing}
+
+
+async def show_list(ctx: ToolContext, list: str) -> dict:
+    return await _list_view(ctx, await _find_list(ctx, list))
+
+
+async def delete_list(ctx: ToolContext, list: str) -> dict:
+    lst = await _find_list(ctx, list)
+    await ctx.repo.delete_list(ctx.user.id, lst.id)
+    if lst.id in ctx.lists_touched:
+        ctx.lists_touched.remove(lst.id)
+    return {"deleted_list": lst.name}
+
+
 # --- specs ---
 
 _DUE = {
@@ -415,6 +493,12 @@ _RRULE = {
                    "Только для повторяющихся дел.",
 }
 _ID = {"type": "integer", "description": "id задачи"}
+_LIST = {"type": "string",
+         "description": "Короткое название списка в именительном падеже, без слова «список»: «покупки» "
+                        "(даже если сказали «в список покупок»), «в поездку», «фильмы», «подарки»"}
+# Строка, а не массив: с массивом GigaChat добавляет по одному пункту за вызов (N запросов к модели вместо одного)
+_ITEMS = {"type": "string",
+          "description": "ВСЕ пункты из фразы одной строкой через запятую: «молоко, хлеб, яйца»"}
 _MEMORY_NUMBER = {"type": "integer", "description": "номер факта в памяти (поле number)"}
 _KIND = {
     "type": "string",
@@ -563,6 +647,32 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
         ToolSpec("forget", "Удалить факт из памяти, если пользователь просит забыть или он больше не верен.",
                  {"type": "object", "properties": {"number": _MEMORY_NUMBER}, "required": ["number"]}),
         forget,
+    ),
+    "add_to_list": (
+        ToolSpec("add_to_list",
+                 "Добавить пункты в список (покупки, вещи в поездку, фильмы…). Списка нет — он создастся.",
+                 {"type": "object", "properties": {"list": _LIST, "items": _ITEMS}, "required": ["list", "items"]}),
+        add_to_list,
+    ),
+    "check_off": (
+        ToolSpec("check_off", "Отметить пункты списка сделанными/купленными («купила молоко»).",
+                 {"type": "object", "properties": {"list": _LIST, "items": _ITEMS}, "required": ["list", "items"]}),
+        check_off,
+    ),
+    "remove_from_list": (
+        ToolSpec("remove_from_list", "Удалить пункты из списка (не отметить, а убрать совсем).",
+                 {"type": "object", "properties": {"list": _LIST, "items": _ITEMS}, "required": ["list", "items"]}),
+        remove_from_list,
+    ),
+    "show_list": (
+        ToolSpec("show_list", "Показать список целиком («что в покупках?»).",
+                 {"type": "object", "properties": {"list": _LIST}, "required": ["list"]}),
+        show_list,
+    ),
+    "delete_list": (
+        ToolSpec("delete_list", "Удалить список целиком — только если пользователь прямо просит.",
+                 {"type": "object", "properties": {"list": _LIST}, "required": ["list"]}),
+        delete_list,
     ),
     "set_auto_memory": (
         ToolSpec(

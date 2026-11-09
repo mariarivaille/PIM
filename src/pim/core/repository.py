@@ -1,10 +1,12 @@
 from datetime import datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pim.core.models import (
     ChatMessage,
+    ItemList,
+    ListItem,
     Memory,
     MemoryKind,
     MemorySource,
@@ -160,6 +162,85 @@ class Repository:
                 query = query.where(ChatMessage.created_at > user.context_since)
             res = await s.scalars(query.order_by(ChatMessage.id.desc()).limit(limit))
             return list(reversed(list(res)))
+
+    # --- списки ---
+
+    async def user_lists(self, user_id: int) -> list[tuple[ItemList, int, int]]:
+        """Списки пользователя с числом открытых и всех пунктов."""
+        async with self._sm() as s:
+            res = await s.execute(
+                select(
+                    ItemList,
+                    func.count(ListItem.id).filter(ListItem.done.is_(False)),
+                    func.count(ListItem.id),
+                )
+                .outerjoin(ListItem, ListItem.list_id == ItemList.id)
+                .where(ItemList.user_id == user_id)
+                .group_by(ItemList.id)
+                .order_by(ItemList.id)
+            )
+            return [(lst, open_, total) for lst, open_, total in res.all()]
+
+    async def get_list(self, user_id: int, list_id: int) -> ItemList | None:
+        async with self._sm() as s:
+            lst = await s.get(ItemList, list_id)
+            return lst if lst and lst.user_id == user_id else None
+
+    async def create_list(self, user_id: int, name: str) -> ItemList:
+        async with self._sm() as s, s.begin():
+            lst = ItemList(user_id=user_id, name=name)
+            s.add(lst)
+        return lst
+
+    async def delete_list(self, user_id: int, list_id: int) -> ItemList | None:
+        async with self._sm() as s, s.begin():
+            lst = await s.get(ItemList, list_id)
+            if not lst or lst.user_id != user_id:
+                return None
+            await s.execute(delete(ListItem).where(ListItem.list_id == list_id))
+            await s.delete(lst)
+            return lst
+
+    async def list_items(self, list_id: int) -> list[ListItem]:
+        """Сначала неотмеченные, потом отмеченные — в порядке добавления."""
+        async with self._sm() as s:
+            res = await s.scalars(
+                select(ListItem).where(ListItem.list_id == list_id).order_by(ListItem.done, ListItem.id)
+            )
+            return list(res)
+
+    async def add_items(self, list_id: int, texts: list[str]) -> list[ListItem]:
+        async with self._sm() as s, s.begin():
+            items = [ListItem(list_id=list_id, text=t) for t in texts]
+            s.add_all(items)
+        return items
+
+    async def set_items_done(self, list_id: int, item_ids: list[int], done: bool) -> None:
+        async with self._sm() as s, s.begin():
+            for item in await s.scalars(select(ListItem).where(ListItem.list_id == list_id,
+                                                               ListItem.id.in_(item_ids))):
+                item.done = done
+                item.done_at = utcnow() if done else None
+
+    async def toggle_item(self, user_id: int, item_id: int) -> ItemList | None:
+        """Отметить/снять отметку (кнопка в Telegram). Возвращает список, если пункт принадлежит пользователю."""
+        async with self._sm() as s, s.begin():
+            item = await s.get(ListItem, item_id)
+            lst = await s.get(ItemList, item.list_id) if item else None
+            if not lst or lst.user_id != user_id:
+                return None
+            item.done = not item.done
+            item.done_at = utcnow() if item.done else None
+            return lst
+
+    async def remove_items(self, list_id: int, item_ids: list[int]) -> None:
+        async with self._sm() as s, s.begin():
+            await s.execute(delete(ListItem).where(ListItem.list_id == list_id, ListItem.id.in_(item_ids)))
+
+    async def clear_done(self, list_id: int) -> int:
+        async with self._sm() as s, s.begin():
+            res = await s.execute(delete(ListItem).where(ListItem.list_id == list_id, ListItem.done.is_(True)))
+            return res.rowcount
 
     # --- рефлексия: какую переписку ещё не разбирали ---
 

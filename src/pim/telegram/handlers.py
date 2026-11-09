@@ -17,10 +17,13 @@ from pim.reminders.digest import build_digest
 from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpone_to_tomorrow
 from pim.stt.base import Transcriber
 from pim.telegram.keyboards import (
+    ListAction,
     ReviewAction,
     TaskAction,
     created_kb,
     format_digest,
+    list_card,
+    lists_menu,
     memory_list,
     review_messages,
     task_card,
@@ -62,7 +65,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
             "Запоминаю важное о тебе: сам из разговоров или по просьбе — «запомни, что мама — Ольга, ДР 12 марта». "
             "Посмотреть — /memory, удалить — «удали факт 3».\n\n"
-            "/tasks — список дел\n/digest — сводка на сегодня\n/review — что переносим?\n"
+            "/tasks — список дел\n/lists — списки (покупки, в поездку…)\n"
+            "/digest — сводка на сегодня\n/review — что переносим?\n"
             "/memory — что я о тебе знаю\n"
             "/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
@@ -92,6 +96,38 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         moved = await postpone_all_to_tomorrow(repo, user, utcnow())
         text = (f"➡️ Перенёс на завтра: {len(moved)}" if moved else "Переносить уже нечего — всё разобрано 👍")
         await cb.message.edit_text(f"{cb.message.html_text}\n\n{text}", reply_markup=None)
+        await cb.answer()
+
+    @router.message(Command("lists"))
+    async def lists(message: Message):
+        user = await ensure_user(message)
+        text, kb = lists_menu(await repo.user_lists(user.id))
+        await message.answer(text, reply_markup=kb)
+
+    async def show_list_card(message: Message, user, list_id: int):
+        lst = await repo.get_list(user.id, list_id)
+        if lst:
+            text, kb = list_card(lst, await repo.list_items(lst.id))
+            await message.answer(text, reply_markup=kb)
+
+    @router.callback_query(ListAction.filter())
+    async def on_list_action(cb: CallbackQuery, callback_data: ListAction):
+        user = await ensure_user(cb)
+        if callback_data.action == "open":
+            await show_list_card(cb.message, user, callback_data.list_id)
+            await cb.answer()
+            return
+        if callback_data.action == "toggle":
+            lst = await repo.toggle_item(user.id, callback_data.item_id)
+        else:  # clear
+            lst = await repo.get_list(user.id, callback_data.list_id)
+            if lst:
+                await repo.clear_done(lst.id)
+        if lst is None:
+            await cb.answer("Этого списка или пункта уже нет")
+            return
+        text, kb = list_card(lst, await repo.list_items(lst.id))
+        await cb.message.edit_text(text, reply_markup=kb)
         await cb.answer()
 
     @router.message(Command("tasks"))
@@ -203,6 +239,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             if t.status == "open":
                 await message.answer(task_card(t, user.timezone, auto_time=t.id in reply.auto_time),
                                      reply_markup=created_kb(t))
+        for list_id in reply.lists_touched:
+            await show_list_card(message, user, list_id)
 
     @router.callback_query(TaskAction.filter())
     async def on_action(cb: CallbackQuery, callback_data: TaskAction):

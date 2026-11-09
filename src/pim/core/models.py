@@ -117,3 +117,28 @@ class Task(Base):
     reminded_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class ItemList(Base):
+    """Список (покупки, в поездку, фильмы…): пункты без времени и напоминаний.
+
+    Владелец — user_id; общий доступ для близких будет отдельной таблицей участников.
+    """
+
+    __tablename__ = "lists"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class ListItem(Base):
+    __tablename__ = "list_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    list_id: Mapped[int] = mapped_column(ForeignKey("lists.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(String(200))
+    done: Mapped[bool] = mapped_column(default=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    done_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

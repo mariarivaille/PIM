@@ -16,7 +16,8 @@ from pim.llm.base import Image, LLMProvider, Message
 
 log = logging.getLogger(__name__)
 
-MAX_STEPS = 6
+# GigaChat делает максимум один вызов инструмента за ответ — на «добавь 5 покупок» или разбор фото нужны шаги
+MAX_STEPS = 12
 MAX_FORWARD_CHARS = 4000
 # Пометка фото в тексте сообщения: модель понимает, что к нему приложена картинка
 PHOTO_MARK = "[Фото"
@@ -27,6 +28,7 @@ class AgentReply:
     text: str
     touched: list[Task] = field(default_factory=list)
     auto_time: set[int] = field(default_factory=set)
+    lists_touched: list[int] = field(default_factory=list)
 
 
 class History:
@@ -107,9 +109,11 @@ class Agent:
         memories = await self._repo.list_memories(user.id)
         tasks_block = "\n".join(json.dumps(task_view(t, user.timezone), ensure_ascii=False) for t in tasks)
         memories_block = "\n".join(json.dumps(memory_view(m, user.timezone), ensure_ascii=False) for m in memories)
+        lists_block = "\n".join(f"«{lst.name}» — неотмеченных {open_}, всего {total}"
+                                for lst, open_, total in await self._repo.user_lists(user.id))
         return Message("system", build_system_prompt(
             to_local(utcnow(), user.timezone), user.timezone, user.digest_time, tasks_block, memories_block,
-            auto_memory=user.auto_memory, review_time=user.review_time,
+            auto_memory=user.auto_memory, review_time=user.review_time, lists_block=lists_block,
         ))
 
     async def _handle(self, user: User, text: str, reference_time: datetime | None = None,
@@ -148,4 +152,4 @@ class Agent:
 
         reply = reply.strip() or "Готово."
         await self.history.add(user.id, Message("user", text), Message("assistant", reply))
-        return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time)
+        return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time, lists_touched=ctx.lists_touched)

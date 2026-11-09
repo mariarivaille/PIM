@@ -34,6 +34,16 @@ SYSTEM_PROMPT = """\
 - «Перенеси всё на завтра» — перенеси через update_task каждое несделанное дело со сроком сегодня или раньше
   на day=tomorrow с тем же временем.
 
+Списки (покупки, вещи в поездку, фильмы, подарки…):
+- Список — не дело: у пунктов нет времени и напоминаний. «Добавь в покупки молоко и хлеб», «в поездку взять
+  зарядку» — add_to_list; «купила молоко» — check_off; «что в покупках?» — show_list.
+- «Купить продукты в субботу», «купи молоко вечером» — это дело с напоминанием (create_task), не список.
+- Используй название существующего списка из перечня ниже, новый создавай, только если подходящего нет.
+- Каждый пункт — отдельный элемент items, коротко: «молоко», «зарядка для телефона».
+
+Списки пользователя:
+{lists}
+
 Фото (сообщение с пометкой «[Фото …]», к нему приложена картинка):
 - Это афиша, письмо, объявление, скриншот переписки, расписание, квитанция и т.п. Найди на картинке всё,
   что пользователю нужно сделать или не пропустить (события, сроки оплаты, дедлайны, записи), и запиши
@@ -101,8 +111,10 @@ AUTO_MEMORY_OFF = (
 
 
 def build_system_prompt(now_local: datetime, tz: str, digest_time: str | None, tasks_block: str,
-                        memories_block: str = "", auto_memory: bool = True, review_time: str | None = None) -> str:
+                        memories_block: str = "", auto_memory: bool = True, review_time: str | None = None,
+                        lists_block: str = "") -> str:
     return SYSTEM_PROMPT.format(
+        lists=lists_block or "(пока нет)",
         review=f"в {review_time}" if review_time else "выключен",
         auto_memory="включено" if auto_memory else "выключено",
         auto_memory_rule=AUTO_MEMORY_ON if auto_memory else AUTO_MEMORY_OFF,

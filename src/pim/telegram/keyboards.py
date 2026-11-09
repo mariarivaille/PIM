@@ -4,8 +4,9 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from pim.core.models import Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
+from pim.core.models import ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
+from pim.lists.matching import normalize
 from pim.reminders.digest import Digest
 from pim.reminders.review import Review
 
@@ -21,6 +22,56 @@ class TaskAction(CallbackData, prefix="t"):
 
 class ReviewAction(CallbackData, prefix="r"):
     action: str  # all_tomorrow
+
+
+class ListAction(CallbackData, prefix="l"):
+    action: str  # toggle | clear | open
+    list_id: int
+    item_id: int = 0
+
+
+# Inline-клавиатура Telegram ограничена 100 кнопками
+MAX_LIST_BUTTONS = 90
+LIST_ICONS = [(("покуп", "продукт", "магаз"), "🛒"), (("поезд", "отпуск", "путеш", "дорог"), "🧳"),
+              (("фильм", "кино", "сериал"), "🎬"), (("подар",), "🎁"), (("книг", "почитат"), "📚")]
+
+
+def _list_icon(name: str) -> str:
+    n = normalize(name)
+    return next((icon for keys, icon in LIST_ICONS if any(n.startswith(k) or f" {k}" in f" {n}" for k in keys)), "📋")
+
+
+def list_card(lst: ItemList, items: list[ListItem]) -> tuple[str, InlineKeyboardMarkup]:
+    """Список как сообщение с чекбоксами: нажатие на пункт отмечает его, «🧹» убирает отмеченные."""
+    done = sum(i.done for i in items)
+    title = f"{_list_icon(lst.name)} <b>{html.escape(lst.name)}</b>"
+    if not items:
+        text = f"{title}\nПусто — скажи, например: «добавь в {html.escape(lst.name.lower())} …»"
+    else:
+        text = f"{title} · отмечено {done} из {len(items)}"
+    kb = InlineKeyboardBuilder()
+    for item in items[:MAX_LIST_BUTTONS]:
+        mark = "✅" if item.done else "☐"
+        label = item.text if len(item.text) <= 60 else item.text[:57] + "…"
+        kb.button(text=f"{mark} {label}", callback_data=ListAction(action="toggle", list_id=lst.id, item_id=item.id))
+    if done:
+        kb.button(text="🧹 Убрать отмеченные", callback_data=ListAction(action="clear", list_id=lst.id))
+    kb.adjust(1)
+    if len(items) > MAX_LIST_BUTTONS:
+        text += f"\nПоказаны первые {MAX_LIST_BUTTONS} пунктов."
+    return text, kb.as_markup()
+
+
+def lists_menu(lists: list[tuple[ItemList, int, int]]) -> tuple[str, InlineKeyboardMarkup | None]:
+    if not lists:
+        return ("Списков пока нет. Скажи, например: «добавь в покупки молоко и хлеб» или "
+                "«в поездку взять зарядку и паспорт» — список создастся сам.", None)
+    kb = InlineKeyboardBuilder()
+    for lst, open_, _ in lists:
+        kb.button(text=f"{_list_icon(lst.name)} {lst.name} ({open_})",
+                  callback_data=ListAction(action="open", list_id=lst.id))
+    kb.adjust(1)
+    return "Твои списки (в скобках — сколько не отмечено):", kb.as_markup()
 
 
 # Сколько дел показывать карточками в вечернем разборе; остальное — в /tasks
