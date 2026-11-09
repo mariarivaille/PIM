@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     gigachat_credentials: str = ""
+    # Готовый access-токен вместо ключа авторизации (живёт ограниченное время, бот его не обновляет)
+    gigachat_access_token: str = ""
+    # Адрес API; пусто = по умолчанию SDK
+    gigachat_base_url: str = ""
     gigachat_scope: str = "GIGACHAT_API_PERS"
     gigachat_model: str = "GigaChat-2-Max"
     gigachat_verify_ssl: bool = False

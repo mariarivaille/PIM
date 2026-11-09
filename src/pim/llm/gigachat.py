@@ -20,8 +20,16 @@ class GigaChatProvider:
     результат функции — сообщение role=function с name; functions_state_id надо возвращать обратно.
     """
 
-    def __init__(self, credentials: str, scope: str, model: str, verify_ssl: bool, temperature: float = 0.2):
-        self._client = GigaChat(credentials=credentials, scope=scope, model=model, verify_ssl_certs=verify_ssl)
+    def __init__(self, credentials: str, scope: str, model: str, verify_ssl: bool, temperature: float = 0.2,
+                 access_token: str = "", base_url: str = ""):
+        self._client = GigaChat(
+            credentials=credentials or None,
+            access_token=access_token or None,
+            base_url=base_url or None,
+            scope=scope,
+            model=model,
+            verify_ssl_certs=verify_ssl,
+        )
         self._temperature = temperature
 
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> Message:

@@ -16,6 +16,8 @@ def make_provider(settings: Settings) -> LLMProvider:
 
         return GigaChatProvider(
             credentials=settings.gigachat_credentials,
+            access_token=settings.gigachat_access_token,
+            base_url=settings.gigachat_base_url,
             scope=settings.gigachat_scope,
             model=settings.gigachat_model,
             verify_ssl=settings.gigachat_verify_ssl,
