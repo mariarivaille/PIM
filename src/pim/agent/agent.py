@@ -9,7 +9,7 @@ from typing import Callable
 from pim.agent.commands import parse_delete_facts
 from pim.agent.prompts import build_system_prompt
 from pim.agent.tools import TOOLS, ToolContext, memory_view, run_tool, task_view
-from pim.core.models import Memory, Task, User, utcnow
+from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
 from pim.llm.base import LLMProvider, Message
@@ -23,7 +23,6 @@ MAX_STEPS = 6
 class AgentReply:
     text: str
     touched: list[Task] = field(default_factory=list)
-    remembered: list[Memory] = field(default_factory=list)
     auto_time: set[int] = field(default_factory=set)
 
 
@@ -116,4 +115,4 @@ class Agent:
 
         reply = reply.strip() or "Готово."
         await self.history.add(user.id, user_msg, Message("assistant", reply))
-        return AgentReply(text=reply, touched=ctx.touched, remembered=ctx.remembered, auto_time=ctx.auto_time)
+        return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time)

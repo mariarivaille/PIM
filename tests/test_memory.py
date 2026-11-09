@@ -68,7 +68,8 @@ async def test_memories_go_to_system_prompt_and_reply(repo, user):
     reply = await agent.handle(user, "запомни, что я хожу в спортзал по вт и чт")
     system = llm.calls[0][0].content
     assert "Мама — Ольга" in system
-    assert [m.content for m in reply.remembered] == ["Спортзал по вт и чт"]
+    assert "Спортзал по вт и чт" in [m.content for m in await repo.list_memories(user.id)]
+    assert not hasattr(reply, "remembered")  # память скрытая: агент не отдаёт её наружу для показа
 
 
 async def test_user_messages_are_processed_in_order(repo, user):

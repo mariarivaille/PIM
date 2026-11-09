@@ -6,7 +6,7 @@ from typing import Protocol
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
-from pim.memory.reflection import ReflectionResult, Reflector
+from pim.memory.reflection import Reflector
 from pim.reminders.digest import Digest, build_digest, digest_due
 
 log = logging.getLogger(__name__)
@@ -20,8 +20,6 @@ class Notifier(Protocol):
     async def send_reminder(self, user: User, task: Task) -> None: ...
 
     async def send_digest(self, user: User, digest: Digest) -> None: ...
-
-    async def send_memory_update(self, user: User, result: ReflectionResult) -> None: ...
 
 
 class ReminderScheduler:
@@ -67,7 +65,7 @@ class ReminderScheduler:
         return sent
 
     async def tick_reflection(self) -> int:
-        """Разбирает затихшие разговоры и сообщает пользователю, что запомнил."""
+        """Разбирает затихшие разговоры и молча обновляет память (пользователь видит её только в /memory)."""
         if self._reflector is None:
             return 0
         now = utcnow()
@@ -82,13 +80,8 @@ class ReminderScheduler:
                 self._reflection_retry_at[user.id] = now + REFLECTION_RETRY
                 continue
             self._reflection_retry_at.pop(user.id, None)
-            if result.empty:
-                continue
-            try:
-                await self._notifier.send_memory_update(user, result)
-            except Exception:
-                log.exception("failed to send memory update to user %s", user.id)
-            changed += 1
+            if not result.empty:
+                changed += 1
         return changed
 
     async def run_forever(self) -> None:

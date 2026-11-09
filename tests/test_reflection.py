@@ -6,9 +6,7 @@ from pim.core.models import MemoryKind, MemorySource, utcnow
 from pim.llm.base import Message
 from pim.memory.reflection import Reflector, parse_reflection
 from pim.reminders.scheduler import ReminderScheduler
-from pim.telegram.keyboards import memory_update_text
 
-from tests.conftest import TZ
 from tests.test_agent import ScriptedLLM
 
 
@@ -77,18 +75,22 @@ async def test_pending_reflection_waits_for_silence_and_respects_toggle(repo, us
     assert await repo.users_pending_reflection(idle_before=now) == []
 
 
-async def test_scheduler_reflection_notifies_and_backs_off(repo, user):
+async def test_scheduler_reflection_is_silent_and_backs_off(repo, user):
     await chat(repo, user, "брата зовут Савва")
     sent = []
 
     class Notifier:
-        async def send_memory_update(self, u, result):
-            sent.append(memory_update_text(result, TZ))
+        """Любое сообщение пользователю от рефлексии — ошибка: память обновляется молча."""
+        def __getattr__(self, name):
+            async def send(*args, **kwargs):
+                sent.append(name)
+            return send
 
     llm = ScriptedLLM([answer(add=[{"kind": "person", "content": "Брат — Савва"}])])
     sched = ReminderScheduler(repo, Notifier(), 30, reflector=Reflector(llm, repo, 150), reflection_idle_minutes=10)
     assert await sched.tick_reflection() == 1
-    assert "Запомнил из разговора" in sent[0] and "1. Брат — Савва <i>(сам)</i>" in sent[0]
+    assert sent == []
+    assert [m.content for m in await repo.list_memories(user.id)] == ["Брат — Савва"]
     assert await sched.tick_reflection() == 0  # уже разобрано
 
     # LLM упала — повторяем не на каждом тике, а после паузы

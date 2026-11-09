@@ -18,7 +18,6 @@ from pim.telegram.keyboards import (
     TaskAction,
     created_kb,
     format_digest,
-    memory_card,
     memory_list,
     task_card,
 )
@@ -126,8 +125,6 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             if t.status == "open":
                 await message.answer(task_card(t, user.timezone, auto_time=t.id in reply.auto_time),
                                      reply_markup=created_kb(t))
-        for m in {m.id: m for m in reply.remembered}.values():
-            await message.answer(memory_card(m, user.timezone))
 
     @router.callback_query(TaskAction.filter())
     async def on_action(cb: CallbackQuery, callback_data: TaskAction):

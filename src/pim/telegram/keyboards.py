@@ -6,7 +6,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from pim.core.models import Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, to_local
-from pim.memory.reflection import ReflectionResult
 from pim.reminders.digest import Digest
 
 # Лимит Telegram 4096 символов, оставляем запас на разметку
@@ -33,10 +32,6 @@ def _memory_line(memory: Memory, tz: str) -> str:
     return f"{memory.number}. {html.escape(memory.content)}{until}{auto}"
 
 
-def memory_card(memory: Memory, tz: str) -> str:
-    return f"📌 Запомнил — {_memory_line(memory, tz)}"
-
-
 AUTO_MEMORY_HINT = {
     True: "Важное из разговоров запоминаю сам (помечено «сам»). Выключить: «не запоминай ничего сам».",
     False: "Сам ничего не запоминаю, только по просьбе. Включить: «запоминай сам».",
@@ -59,18 +54,6 @@ def memory_list(memories: list[Memory], tz: str, auto_memory: bool = True) -> st
     parts.append(AUTO_MEMORY_HINT[auto_memory])
     return _fit(parts)
 
-
-def memory_update_text(result: ReflectionResult, tz: str) -> str:
-    """Сообщение после рефлексии: что бот запомнил сам и что исправил."""
-    parts = []
-    if result.added:
-        parts.append("🧠 <b>Запомнил из разговора</b>")
-        parts += [_memory_line(m, tz) for m in result.added]
-    if result.updated:
-        parts.append(("\n" if parts else "") + "✏️ <b>Уточнил</b>")
-        parts += [_memory_line(m, tz) for m in result.updated]
-    parts.append("\nЕсли что-то лишнее — «удали факт N». Не запоминать самому — «не запоминай ничего сам».")
-    return "\n".join(parts)
 
 
 SNOOZE_OPTIONS = [(15, "+15 мин"), (60, "+1 ч"), (24 * 60, "Завтра")]

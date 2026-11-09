@@ -7,11 +7,10 @@ from pim.agent.agent import Agent
 from pim.config import Settings
 from pim.core.models import Task, User
 from pim.core.repository import Repository
-from pim.memory.reflection import ReflectionResult
 from pim.reminders.digest import Digest
 from pim.stt.base import Transcriber
 from pim.telegram.handlers import make_router
-from pim.telegram.keyboards import format_digest, memory_update_text, reminder_kb, task_card
+from pim.telegram.keyboards import format_digest, reminder_kb, task_card
 
 
 class AllowlistMiddleware(BaseMiddleware):
@@ -36,9 +35,6 @@ class TelegramNotifier:
 
     async def send_digest(self, user: User, digest: Digest) -> None:
         await self._bot.send_message(user.chat_id, format_digest(digest, user.timezone))
-
-    async def send_memory_update(self, user: User, result: ReflectionResult) -> None:
-        await self._bot.send_message(user.chat_id, memory_update_text(result, user.timezone))
 
 
 COMMANDS = [
