@@ -17,6 +17,12 @@ class ToolSpec:
 
 
 @dataclass
+class Image:
+    data: bytes
+    mime: str = "image/jpeg"
+
+
+@dataclass
 class ToolCall:
     id: str
     name: str
@@ -34,9 +40,15 @@ class Message:
     # непрозрачные данные провайдера, которые надо вернуть ему в следующем запросе
     # (например functions_state_id у GigaChat)
     provider_meta: dict[str, Any] = field(default_factory=dict)
+    # картинки к сообщению пользователя (нужна модель с поддержкой изображений)
+    images: list[Image] = field(default_factory=list)
 
 
 class LLMProvider(Protocol):
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> Message:
         """Возвращает ответ ассистента: текст и/или tool_calls."""
+        ...
+
+    async def cleanup(self, images: list[Image]) -> None:
+        """Убрать картинки хода, если провайдер хранил их на своей стороне."""
         ...

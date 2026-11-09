@@ -112,3 +112,13 @@ async def test_auto_time_is_flagged_and_never_in_past(repo, user, monkeypatch):
     today = await run_tool(ctx, "create_task", {"title": "купить хлеб", "day": "today"})
     assert today["created"]["time_chosen_by_assistant"] and today["created"]["due"] == "вт 10.11 16:00"
     assert ctx.auto_time == {ctx.touched[0].id, ctx.touched[2].id}
+
+
+async def test_remind_before_event(repo, user):
+    ctx = ToolContext(repo, user)
+    res = await run_tool(ctx, "create_task", {"title": "собрание", "due_at": "2030-11-13T18:00",
+                                               "remind_before_minutes": 1440, "notes": "каб. 214"})
+    task = ctx.touched[0]
+    assert to_local(task.due_at, TZ).strftime("%d.%m %H:%M") == "12.11 18:00"
+    assert task.notes.startswith("Само событие: ") and "13.11 18:00" in task.notes and task.notes.endswith("каб. 214")
+    assert res["created"]["remind_at"].endswith("12.11 18:00") and res["created"]["event_at"].endswith("13.11 18:00")

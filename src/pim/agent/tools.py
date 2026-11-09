@@ -172,7 +172,8 @@ async def _get(ctx: ToolContext, task_id: int) -> Task:
 
 async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, day: str | None = None,
                       time: str | None = None, in_minutes: int | None = None, rrule: str | None = None,
-                      notes: str | None = None, time_guessed: bool = False) -> dict:
+                      notes: str | None = None, time_guessed: bool = False,
+                      remind_before_minutes: int | None = None) -> dict:
     rrule = _check_rrule(rrule)
     date_only_due = bool(due_at) and ("T" not in due_at or due_at.split("T", 1)[1].startswith("00:00"))
     if ((day and not time) or date_only_due) and not ctx.asked_for_time:
@@ -186,13 +187,25 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
     due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
+    event_at = None
+    if remind_before_minutes and due:
+        # «напомни за день до собрания»: вычитает код, а не модель; когда само событие — в заметке
+        event_at = due
+        due = event_at - timedelta(minutes=int(remind_before_minutes))
+        when = f"Само событие: {format_local(event_at, ctx.user.timezone)}"
+        notes = f"{when}. {notes}" if notes else when
     task = await ctx.repo.create_task(ctx.user.id, title=title, due_at=due, rrule=rrule, notes=notes)
     if due and due <= utcnow():
         # срок уже прошёл (обычно из пересланного сообщения): дело видно в сводке как просроченное,
         # но отдельно не звенит — бот и так сказал об этом в ответе
         await ctx.repo.mark_reminded(task.id, utcnow())
     ctx.touched.append(task)
-    return {"created": _due_view(ctx, task, auto)}
+    view = _due_view(ctx, task, auto)
+    if event_at:
+        # чтобы модель не выдала время напоминания за время события
+        view["event_at"] = format_local(event_at, ctx.user.timezone)
+        view["remind_at"] = view.pop("due")
+    return {"created": view}
 
 
 async def list_tasks(ctx: ToolContext) -> dict:
@@ -435,6 +448,12 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "due_at": _DUE,
                     "rrule": _RRULE,
                     "notes": {"type": "string", "description": "Доп. детали, если есть"},
+                    "remind_before_minutes": {
+                        "type": "integer",
+                        "description": "Если просят напомнить заранее («за день до», «за час»): время СОБЫТИЯ передай "
+                                       "в day/time/due_at как есть, а сюда — за сколько минут до него напомнить "
+                                       "(за час = 60, за день = 1440). Вычитать сам не нужно.",
+                    },
                 },
                 "required": ["title"],
             },

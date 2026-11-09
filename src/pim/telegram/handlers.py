@@ -12,6 +12,7 @@ from pim.config import Settings
 from pim.core.models import utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import format_local
+from pim.llm.base import Image
 from pim.reminders.digest import build_digest
 from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpone_to_tomorrow
 from pim.stt.base import Transcriber
@@ -26,6 +27,8 @@ from pim.telegram.keyboards import (
 )
 
 log = logging.getLogger(__name__)
+
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 def forward_sender(origin, message: Message) -> str:
@@ -116,6 +119,32 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         user = await ensure_user(message)
         await message.answer(memory_list(await repo.list_memories(user.id), user.timezone, user.auto_memory))
 
+    @router.message(F.photo | F.document.mime_type.startswith("image/"))
+    async def on_photo(message: Message):
+        # регистрируется раньше on_text: у фото с подписью есть caption, но картинку терять нельзя
+        media = message.photo[-1] if message.photo else message.document  # photo[-1] — самый крупный размер
+        if media.file_size and media.file_size > MAX_IMAGE_BYTES:
+            await message.answer("Картинка слишком большая — пришли её как фото, а не файлом.")
+            return
+        user = await ensure_user(message)
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            data = (await message.bot.download(media)).getvalue()
+            mime = "image/jpeg" if message.photo else (message.document.mime_type or "image/jpeg")
+            images = [Image(data=data, mime=mime)]
+            caption = message.caption or ""
+            try:
+                if origin := message.forward_origin:
+                    reply = await agent.handle_forwarded(user, caption, forward_sender(origin, message),
+                                                         origin.date, images=images)
+                else:
+                    reply = await agent.handle_photo(user, images, caption)
+            except Exception:
+                log.exception("photo processing failed")
+                await message.answer("Не получилось разобрать фото. Возможно, текущая модель не умеет "
+                                     "работать с картинками — напиши, что на нём, текстом.")
+                return
+            await send_reply(message, user, reply)
+
     @router.message(F.text | F.caption)
     async def on_text(message: Message):
         # подпись к фото/файлу обрабатываем как текст — так работают и пересланные посты с картинкой
@@ -149,7 +178,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
 
     @router.message(F.forward_origin)
     async def on_forwarded_without_text(message: Message):
-        await message.answer("В пересланном сообщении я понимаю текст, подписи и голосовые — здесь их нет. "
+        await message.answer("В пересланном сообщении я понимаю текст, фото и голосовые — здесь их нет. "
                              "Напиши, что с ним сделать.")
 
     async def process(message: Message, user, text: str):
@@ -162,6 +191,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             log.exception("agent failed")
             await message.answer("Что-то пошло не так с моделью, попробуй ещё раз.")
             return
+        await send_reply(message, user, reply)
+
+    async def send_reply(message: Message, user, reply):
         await message.answer(html.escape(reply.text))
         # дедуп: одна задача могла быть затронута несколько раз за ход
         seen = {}

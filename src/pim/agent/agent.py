@@ -12,12 +12,14 @@ from pim.agent.tools import FORWARD_MARK, TOOLS, ToolContext, memory_view, run_t
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import WEEKDAYS_RU, to_local
-from pim.llm.base import LLMProvider, Message
+from pim.llm.base import Image, LLMProvider, Message
 
 log = logging.getLogger(__name__)
 
 MAX_STEPS = 6
 MAX_FORWARD_CHARS = 4000
+# Пометка фото в тексте сообщения: модель понимает, что к нему приложена картинка
+PHOTO_MARK = "[Фото"
 
 
 @dataclass
@@ -73,16 +75,25 @@ class Agent:
                 return reply
             return await self._handle(user, text)
 
-    async def handle_forwarded(self, user: User, text: str, sender: str, sent_at: datetime) -> AgentReply:
+    async def handle_photo(self, user: User, images: list[Image], caption: str = "") -> AgentReply:
+        """Фото (афиша, письмо, скриншот…): найти на нём дела. Подпись — слова самого пользователя."""
+        text = f"{PHOTO_MARK} с подписью] {caption}" if caption else f"{PHOTO_MARK} без подписи]"
+        async with self._locks[user.id]:
+            return await self._handle(user, text, images=images)
+
+    async def handle_forwarded(self, user: User, text: str, sender: str, sent_at: datetime,
+                               images: list[Image] | None = None) -> AgentReply:
         """Пересланное сообщение: чужие слова, из которых надо достать дела пользователя.
 
         Относительные даты в нём («завтра», «в пятницу») считаются от момента отправки, а не от «сейчас».
         """
         local = to_local(sent_at, user.timezone)
         header = f"{FORWARD_MARK} от {sender}, отправлено {WEEKDAYS_RU[local.weekday()]} {local:%d.%m.%Y %H:%M}]"
+        if images:
+            header += " " + PHOTO_MARK + "]"
         wrapped = f"{header}\n{text[:MAX_FORWARD_CHARS]}"
         async with self._locks[user.id]:
-            return await self._handle(user, wrapped, reference_time=sent_at)
+            return await self._handle(user, wrapped, reference_time=sent_at, images=images)
 
     async def _delete_facts(self, user: User, numbers: list[int]) -> AgentReply:
         lines = []
@@ -101,12 +112,22 @@ class Agent:
             auto_memory=user.auto_memory, review_time=user.review_time,
         ))
 
-    async def _handle(self, user: User, text: str, reference_time: datetime | None = None) -> AgentReply:
+    async def _handle(self, user: User, text: str, reference_time: datetime | None = None,
+                      images: list[Image] | None = None) -> AgentReply:
+        try:
+            return await self._run(user, text, reference_time, images or [])
+        finally:
+            if images:
+                await self._llm.cleanup(images)
+
+    async def _run(self, user: User, text: str, reference_time: datetime | None,
+                   images: list[Image]) -> AgentReply:
         history = await self.history.get(user.id)
         prev_assistant = next((m.content for m in reversed(history) if m.role == "assistant"), "")
         ctx = ToolContext(repo=self._repo, user=user, user_text=text, prev_assistant=prev_assistant,
                           max_memories=self._max_memories, reference_time=reference_time)
-        user_msg = Message("user", text)
+        # в историю уходит только текст (с пометкой «[Фото…]»), сама картинка — только в этот ход
+        user_msg = Message("user", text, images=images)
         messages = [await self._system_message(user), *history, user_msg]
 
         reply = ""
@@ -126,5 +147,5 @@ class Agent:
             reply = "Не получилось довести дело до конца, попробуй переформулировать."
 
         reply = reply.strip() or "Готово."
-        await self.history.add(user.id, user_msg, Message("assistant", reply))
+        await self.history.add(user.id, Message("user", text), Message("assistant", reply))
         return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time)

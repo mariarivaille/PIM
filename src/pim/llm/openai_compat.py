@@ -1,9 +1,10 @@
+import base64
 import json
 import logging
 
 from openai import AsyncOpenAI
 
-from pim.llm.base import Message, ToolCall, ToolSpec
+from pim.llm.base import Image, Message, ToolCall, ToolSpec
 
 log = logging.getLogger(__name__)
 
@@ -38,11 +39,21 @@ class OpenAICompatProvider:
             calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
         return Message(role="assistant", content=msg.content or "", tool_calls=calls)
 
+    async def cleanup(self, images: list[Image]) -> None:
+        return None  # картинки идут прямо в запросе, на стороне API ничего не хранится
+
     @staticmethod
     def _to_api(m: Message) -> dict:
         if m.role == "tool":
             return {"role": "tool", "tool_call_id": m.tool_call_id, "content": m.content}
-        d: dict = {"role": m.role, "content": m.content}
+        content: str | list = m.content
+        if m.images:
+            content = [{"type": "text", "text": m.content}] + [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{img.mime};base64,{base64.b64encode(img.data).decode()}"}}
+                for img in m.images
+            ]
+        d: dict = {"role": m.role, "content": content}
         if m.tool_calls:
             d["tool_calls"] = [
                 {
