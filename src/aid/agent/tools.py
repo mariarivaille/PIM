@@ -14,6 +14,7 @@ from aid.core.models import Task, User
 from aid.core.repository import Repository
 from aid.core.timeutils import format_local, parse_local
 from aid.llm.base import ToolSpec
+from aid.reminders.digest import parse_hhmm
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +129,22 @@ async def set_timezone(ctx: ToolContext, timezone: str) -> dict:
     return {"timezone": timezone}
 
 
+async def set_digest_time(ctx: ToolContext, time: str) -> dict:
+    value = time.strip().lower()
+    if value in ("off", "", "выкл"):
+        await ctx.repo.set_digest_time(ctx.user.id, None)
+        ctx.user.digest_time = None
+        return {"digest": "off"}
+    try:
+        parsed = parse_hhmm(value)
+    except ValueError as e:
+        raise ToolError(f"время сводки нужно в формате HH:MM, получено {time!r}") from e
+    normalized = parsed.strftime("%H:%M")
+    await ctx.repo.set_digest_time(ctx.user.id, normalized)
+    ctx.user.digest_time = normalized
+    return {"digest_time": normalized}
+
+
 # --- specs ---
 
 _DUE = {
@@ -200,6 +217,14 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                   "properties": {"timezone": {"type": "string", "description": "IANA, например Asia/Yekaterinburg"}},
                   "required": ["timezone"]}),
         set_timezone,
+    ),
+    "set_digest_time": (
+        ToolSpec("set_digest_time", "Настроить утреннюю сводку дел: время отправки или выключить.",
+                 {"type": "object",
+                  "properties": {"time": {"type": "string",
+                                          "description": "Локальное время HH:MM, например 08:30, или off чтобы выключить"}},
+                  "required": ["time"]}),
+        set_digest_time,
     ),
 }
 

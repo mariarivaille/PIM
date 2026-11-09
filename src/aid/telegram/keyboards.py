@@ -5,7 +5,10 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from aid.core.models import Task
-from aid.core.timeutils import format_local
+from aid.core.timeutils import WEEKDAYS_RU, format_local, to_local
+from aid.reminders.digest import Digest
+
+MAX_UNDATED = 5
 
 
 class TaskAction(CallbackData, prefix="t"):
@@ -25,6 +28,38 @@ def task_card(task: Task, tz: str) -> str:
         parts.append(f"🔁 {html.escape(task.rrule)}")
     if task.notes:
         parts.append(html.escape(task.notes))
+    return "\n".join(parts)
+
+
+def _digest_line(task: Task, tz: str, with_date: bool) -> str:
+    when = ""
+    if task.due_at:
+        local = to_local(task.due_at, tz)
+        when = format_local(task.due_at, tz) if with_date else f"{local:%H:%M}"
+        when = f"{when} — "
+    rep = " 🔁" if task.rrule else ""
+    return f"• {when}{html.escape(task.title)}{rep}"
+
+
+def format_digest(digest: Digest, tz: str) -> str:
+    day = digest.day
+    parts = [f"☀️ <b>Доброе утро! План на {WEEKDAYS_RU[day.weekday()]} {day:%d.%m}</b>"]
+    if digest.is_empty:
+        parts.append("Дел нет — свободный день 🎉")
+        return "\n".join(parts)
+    if digest.overdue:
+        parts.append("\n<b>Просрочено:</b>")
+        parts += [_digest_line(t, tz, with_date=True) for t in digest.overdue]
+    if digest.today:
+        parts.append("\n<b>Сегодня:</b>")
+        parts += [_digest_line(t, tz, with_date=False) for t in digest.today]
+    else:
+        parts.append("\nНа сегодня ничего не запланировано.")
+    if digest.undated:
+        parts.append("\n<b>Без срока:</b>")
+        parts += [_digest_line(t, tz, with_date=False) for t in digest.undated[:MAX_UNDATED]]
+        if len(digest.undated) > MAX_UNDATED:
+            parts.append(f"…и ещё {len(digest.undated) - MAX_UNDATED}, полный список — /tasks")
     return "\n".join(parts)
 
 

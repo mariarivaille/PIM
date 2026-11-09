@@ -42,6 +42,10 @@ class User(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # telegram user id
     chat_id: Mapped[int] = mapped_column(BigInteger)
     timezone: Mapped[str] = mapped_column(String(64))
+    # Локальное время утренней сводки "HH:MM"; None = сводка выключена
+    digest_time: Mapped[str | None] = mapped_column(String(5), default="09:00", server_default="09:00")
+    # Локальная дата (YYYY-MM-DD) последней отправленной сводки — чтобы не слать дважды
+    last_digest_on: Mapped[str | None] = mapped_column(String(10))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

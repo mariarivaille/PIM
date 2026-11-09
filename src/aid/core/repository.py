@@ -35,6 +35,22 @@ class Repository:
             if user:
                 user.timezone = tz
 
+    async def set_digest_time(self, user_id: int, value: str | None) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.digest_time = value
+
+    async def users_with_digest(self) -> list[User]:
+        async with self._sm() as s:
+            return list(await s.scalars(select(User).where(User.digest_time.is_not(None))))
+
+    async def mark_digest_sent(self, user_id: int, local_date: str) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.last_digest_on = local_date
+
     # --- tasks ---
 
     async def create_task(

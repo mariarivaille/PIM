@@ -6,6 +6,7 @@ SYSTEM_PROMPT = """\
 Ты — личный ассистент, который ведёт список дел пользователя и напоминает о них.
 
 Сейчас: {now} ({weekday}), часовой пояс пользователя: {tz}.
+Утренняя сводка дел: {digest}.
 
 Правила:
 - Когда пользователь говорит о деле, которое надо сделать, — сразу записывай его через create_task, не переспрашивай без нужды.
@@ -14,6 +15,7 @@ SYSTEM_PROMPT = """\
 - Если из фразы непонятно, нужно ли напоминание и когда, — запиши задачу без due_at.
 - Регулярные дела («каждый вторник», «по будням в 8») — через rrule, due_at = первое срабатывание.
 - Чтобы изменить, закрыть или удалить задачу, используй её id из списка ниже или из list_tasks.
+- Просьбы про утреннюю сводку («присылай сводку в 8:30», «не присылай сводку») — через set_digest_time.
 - Если инструмент вернул error — исправь аргументы и попробуй ещё раз или спроси пользователя.
 - Отвечай коротко, по-русски, без лишних вежливостей. Время показывай в формате «пт 30.10 15:00».
 
@@ -22,10 +24,11 @@ SYSTEM_PROMPT = """\
 """
 
 
-def build_system_prompt(now_local: datetime, tz: str, tasks_block: str) -> str:
+def build_system_prompt(now_local: datetime, tz: str, digest_time: str | None, tasks_block: str) -> str:
     return SYSTEM_PROMPT.format(
         now=now_local.strftime("%Y-%m-%d %H:%M"),
         weekday=WEEKDAYS_RU[now_local.weekday()],
         tz=tz,
+        digest=f"в {digest_time}" if digest_time else "выключена",
         tasks=tasks_block or "(нет)",
     )

@@ -12,7 +12,8 @@ from aid.config import Settings
 from aid.core.models import utcnow
 from aid.core.repository import Repository
 from aid.core.timeutils import format_local
-from aid.telegram.keyboards import TaskAction, created_kb, task_card
+from aid.reminders.digest import build_digest
+from aid.telegram.keyboards import TaskAction, created_kb, format_digest, task_card
 
 log = logging.getLogger(__name__)
 
@@ -28,11 +29,20 @@ def make_router(agent: Agent, repo: Repository, settings: Settings) -> Router:
     @router.message(CommandStart())
     async def start(message: Message):
         user = await ensure_user(message)
+        digest = f"в {user.digest_time}" if user.digest_time else "выключена"
         await message.answer(
             "Привет! Пиши мне дела обычным текстом — я запишу и напомню.\n"
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
-            f"/tasks — список дел\n/reset — забыть контекст диалога\n\nЧасовой пояс: {user.timezone}"
+            "/tasks — список дел\n/digest — сводка на сегодня\n/reset — забыть контекст диалога\n\n"
+            f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
+            "(«присылай сводку в 8:30» / «не присылай сводку»)"
         )
+
+    @router.message(Command("digest"))
+    async def digest(message: Message):
+        user = await ensure_user(message)
+        d = await build_digest(repo, user, utcnow())
+        await message.answer(format_digest(d, user.timezone))
 
     @router.message(Command("tasks"))
     async def tasks(message: Message):

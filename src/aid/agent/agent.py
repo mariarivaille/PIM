@@ -51,7 +51,10 @@ class Agent:
         ctx = ToolContext(repo=self._repo, user=user)
         tasks = await self._repo.list_open_tasks(user.id)
         tasks_block = "\n".join(json.dumps(task_view(t, user.timezone), ensure_ascii=False) for t in tasks)
-        system = Message("system", build_system_prompt(to_local(utcnow(), user.timezone), user.timezone, tasks_block))
+        system = Message(
+            "system",
+            build_system_prompt(to_local(utcnow(), user.timezone), user.timezone, user.digest_time, tasks_block),
+        )
 
         user_msg = Message("user", text)
         messages = [system, *self.history.get(user.id), user_msg]

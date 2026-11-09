@@ -4,18 +4,22 @@ from typing import Protocol
 
 from aid.core.models import Task, User, utcnow
 from aid.core.repository import Repository
+from aid.core.timeutils import to_local
+from aid.reminders.digest import Digest, build_digest, digest_due
 
 log = logging.getLogger(__name__)
 
 
 class Notifier(Protocol):
-    """Канал доставки напоминаний: Telegram, позже push в приложение и т.п."""
+    """Канал доставки: Telegram, позже push в приложение и т.п."""
 
     async def send_reminder(self, user: User, task: Task) -> None: ...
 
+    async def send_digest(self, user: User, digest: Digest) -> None: ...
+
 
 class ReminderScheduler:
-    """Детерминированный поллинг БД: всё состояние в таблице tasks, рестарт ничего не теряет."""
+    """Детерминированный поллинг БД: всё состояние в таблицах, рестарт ничего не теряет."""
 
     def __init__(self, repo: Repository, notifier: Notifier, poll_seconds: int):
         self._repo = repo
@@ -36,11 +40,27 @@ class ReminderScheduler:
             sent += 1
         return sent
 
+    async def tick_digests(self) -> int:
+        now = utcnow()
+        sent = 0
+        for user in await self._repo.users_with_digest():
+            if not digest_due(user, now):
+                continue
+            try:
+                await self._notifier.send_digest(user, await build_digest(self._repo, user, now))
+            except Exception:
+                log.exception("failed to send digest to user %s", user.id)
+                continue
+            await self._repo.mark_digest_sent(user.id, to_local(now, user.timezone).date().isoformat())
+            sent += 1
+        return sent
+
     async def run_forever(self) -> None:
         log.info("reminder scheduler started, poll every %ss", self._poll)
         while True:
-            try:
-                await self.tick()
-            except Exception:
-                log.exception("scheduler tick failed")
+            for job in (self.tick, self.tick_digests):
+                try:
+                    await job()
+                except Exception:
+                    log.exception("scheduler job %s failed", job.__name__)
             await asyncio.sleep(self._poll)
