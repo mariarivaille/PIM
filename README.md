@@ -1,1 +1,62 @@
 # AIDAssistant
+
+Личный LLM-ассистент: Telegram-бот, которому пишешь дела обычным текстом — он их записывает и напоминает.
+Дальше — выполнение части дел и отдельное приложение.
+
+## Архитектура
+
+```
+telegram/  ─┐                      (позже: api/ для приложения — ещё один клиент того же ядра)
+            ▼
+agent/     Agent: LLM + цикл tool calling (create/list/update/complete/cancel task, set_timezone)
+            │
+llm/       LLMProvider: OpenRouter (OpenAI-совместимый) | GigaChat — общий формат Message/ToolCall
+            │
+core/      Repository + SQLAlchemy модели (User, Task), работа со временем и RRULE
+            ▲
+reminders/ ReminderScheduler: поллинг БД → Notifier (сейчас TelegramNotifier)
+```
+
+Принципы:
+- **LLM только разбирает речь в структуру**, напоминания шлёт детерминированный планировщик по `due_at` из БД.
+- Время в БД — UTC; LLM отдаёт локальное время пользователя, перевод — в `core/timeutils.py`.
+- `core/`, `agent/`, `reminders/` не знают про Telegram — новый интерфейс подключается без изменений ядра.
+
+## Запуск
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+cp .env.example .env   # заполнить токены
+.venv/bin/aid
+```
+
+Тесты: `.venv/bin/pytest`
+
+### Переключение модели
+
+`LLM_PROVIDER=gigachat` или `LLM_PROVIDER=openrouter` + `OPENROUTER_MODEL` (например `qwen/qwen3-235b-a22b-2507`,
+`google/gemini-2.5-flash`). Модель на OpenRouter должна поддерживать tool calling.
+
+### Деплой (docker)
+
+```bash
+docker compose up -d --build
+```
+
+БД лежит в `./data/aid.db` на хосте.
+
+## Как добавить новое умение
+
+1. Обработчик + `ToolSpec` в `agent/tools.py`, регистрация в `TOOLS`.
+2. Схему параметров держать простой (string/integer/enum, без `anyOf`/`null`) — иначе GigaChat её не съест.
+3. Тест со `ScriptedLLM` в `tests/test_agent.py`.
+
+## Roadmap
+
+- [x] Запись дел, напоминания, повторы (RRULE), «сделано / отложить», /tasks
+- [ ] Голосовые сообщения (Whisper / SaluteSpeech)
+- [ ] Утренний дайджест и вечерний «что переносим?»
+- [ ] История диалога и факты о пользователе в БД (память), alembic
+- [ ] Интеграции: календарь, почта; подтверждение необратимых действий
+- [ ] API (FastAPI) + приложение / Telegram Mini App

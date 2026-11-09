@@ -1,0 +1,32 @@
+[project]
+name = "aid-assistant"
+version = "0.1.0"
+description = "Personal LLM assistant: Telegram bot that records tasks and reminds about them"
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram>=3.13",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "pydantic-settings>=2.4",
+    "openai>=1.50",
+    "gigachat>=0.2",
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+aid = "aid.main:run"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
