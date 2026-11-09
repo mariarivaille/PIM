@@ -12,6 +12,8 @@ from pim.core.models import (
     MemoryKind,
     MemorySource,
     Task,
+    TaskEvent,
+    TaskEventKind,
     TaskStatus,
     User,
     utcnow,
@@ -394,6 +396,8 @@ class Repository:
             nxt = None
             if task.rrule and task.due_at:
                 nxt = next_occurrence(task.rrule, task.due_at, tz, after=max(now, task.due_at))
+            reaction = int((now - task.reminded_at).total_seconds() // 60) if task.reminded_at else None
+            s.add(TaskEvent(user_id=user_id, task_id=task.id, kind=TaskEventKind.DONE, at=now, minutes=reaction))
             if nxt:
                 task.due_at = nxt
                 task.reminded_at = None
@@ -403,10 +407,29 @@ class Repository:
             return task
 
     async def cancel_task(self, user_id: int, task_id: int) -> Task | None:
-        return await self.update_task(user_id, task_id, status=TaskStatus.CANCELLED)
+        task = await self.update_task(user_id, task_id, status=TaskStatus.CANCELLED)
+        if task:
+            await self.log_event(user_id, TaskEventKind.CANCELLED, utcnow(), task_id=task_id)
+        return task
 
     async def snooze_task(self, user_id: int, task_id: int, until: datetime) -> Task | None:
-        return await self.update_task(user_id, task_id, due_at=until)
+        task = await self.update_task(user_id, task_id, due_at=until)
+        if task:
+            now = utcnow()
+            await self.log_event(user_id, TaskEventKind.SNOOZED, now, task_id=task_id,
+                                 minutes=max(0, int((until - now).total_seconds() // 60)))
+        return task
+
+    async def log_event(self, user_id: int, kind: TaskEventKind, at: datetime, task_id: int | None = None,
+                        minutes: int | None = None) -> None:
+        async with self._sm() as s, s.begin():
+            s.add(TaskEvent(user_id=user_id, task_id=task_id, kind=kind, at=at, minutes=minutes))
+
+    async def task_events(self, user_id: int, since: datetime) -> list[TaskEvent]:
+        async with self._sm() as s:
+            return list(await s.scalars(
+                select(TaskEvent).where(TaskEvent.user_id == user_id, TaskEvent.at >= since).order_by(TaskEvent.at)
+            ))
 
     async def due_tasks(self, now: datetime) -> list[tuple[Task, User]]:
         """Открытые задачи, по которым пора напомнить и ещё не напомнили."""
@@ -424,8 +447,11 @@ class Repository:
             )
             return [(t, u) for t, u in res.all()]
 
-    async def mark_reminded(self, task_id: int, at: datetime) -> None:
+    async def mark_reminded(self, task_id: int, at: datetime, sent: bool = True) -> None:
+        """sent=False — напоминание не отправлялось (срок уже прошёл при создании), в журнал не пишем."""
         async with self._sm() as s, s.begin():
             task = await s.get(Task, task_id)
             if task:
                 task.reminded_at = at
+                if sent:
+                    s.add(TaskEvent(user_id=task.user_id, task_id=task.id, kind=TaskEventKind.REMINDED, at=at))

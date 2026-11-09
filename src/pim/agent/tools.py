@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
 
-from pim.core.models import ItemList, Memory, MemoryKind, MemorySource, Task, User, utcnow
+from pim.core.models import ItemList, Memory, MemoryKind, MemorySource, Task, TaskEventKind, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import (
     DAY_KEYWORDS,
@@ -25,6 +25,7 @@ from pim.core.timeutils import (
     resolve_day_time,
     to_local,
 )
+from pim.learning.timing import TimeProfile
 from pim.lists.matching import display_name, match_items, match_list, normalize
 from pim.llm.base import ToolSpec
 from pim.reminders.daily import parse_hhmm
@@ -51,6 +52,8 @@ class ToolContext:
     reference_time: datetime | None = None
     # id списков, изменённых или открытых за ход — телеграм-слой покажет их с чекбоксами
     lists_touched: list[int] = field(default_factory=list)
+    # привычки по времени (learning/timing.py) — для времени по умолчанию
+    profile: TimeProfile | None = None
     # текст сообщения пользователя и предыдущий ответ бота: по ним проверяем, просил ли он что-то запомнить
     user_text: str = ""
     prev_assistant: str = ""
@@ -103,8 +106,15 @@ def _parse_due(ctx: ToolContext, value: str) -> tuple[datetime, bool]:
     # Только дата или ровно полночь — модель не выбрала время: ставим как «просто день», а не будим в 00:00
     defaulted = "T" not in value or (local.hour, local.minute, local.second) == (0, 0, 0)
     if defaulted:
-        local = local.replace(hour=DEFAULT_TIME.hour, minute=DEFAULT_TIME.minute, second=0)
+        default = _default_time(ctx, weekend=local.weekday() >= 5)
+        local = local.replace(hour=default.hour, minute=default.minute, second=0)
     return parse_local(local.isoformat(), ctx.user.timezone), defaulted
+
+
+def _default_time(ctx: ToolContext, weekend: bool) -> dt_time:
+    """Время, если его не назвали ни пользователь, ни модель: обычный час пользователя, иначе DEFAULT_TIME."""
+    hour = ctx.profile.preferred_hour(weekend) if ctx.profile else None
+    return dt_time(hour, 0) if hour is not None else DEFAULT_TIME
 
 
 def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: str | None,
@@ -130,6 +140,9 @@ def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: st
         except ValueError as e:
             raise ToolError(f"time нужно в формате HH:MM, получено {time!r}") from e
         due = resolve_day_time(base, ctx.user.timezone, day, at)
+        if at is None:
+            weekend = to_local(due, ctx.user.timezone).weekday() >= 5
+            due = resolve_day_time(base, ctx.user.timezone, day, _default_time(ctx, weekend))
         auto = at is None or bool(time_guessed)
     else:
         return None, False
@@ -201,8 +214,11 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
     if due and due <= utcnow():
         # срок уже прошёл (обычно из пересланного сообщения): дело видно в сводке как просроченное,
         # но отдельно не звенит — бот и так сказал об этом в ответе
-        await ctx.repo.mark_reminded(task.id, utcnow())
+        await ctx.repo.mark_reminded(task.id, utcnow(), sent=False)
     ctx.touched.append(task)
+    if due and not auto and not in_minutes and due > utcnow():
+        # пользователь сам назвал время — сигнал, в какие часы ему удобно (см. learning/timing.py)
+        await ctx.repo.log_event(ctx.user.id, TaskEventKind.PLANNED, event_at or due, task_id=task.id)
     view = _due_view(ctx, task, auto)
     if event_at:
         # чтобы модель не выдала время напоминания за время события

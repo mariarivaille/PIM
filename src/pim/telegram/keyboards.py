@@ -173,6 +173,15 @@ def memory_list(memories: list[Memory], tz: str, auto_memory: bool = True) -> st
 
 
 SNOOZE_OPTIONS = [(15, "+15 мин"), (60, "+1 ч"), (24 * 60, "Завтра")]
+SNOOZE_LABELS = {15: "+15 мин", 30: "+30 мин", 60: "+1 ч", 120: "+2 ч", 180: "+3 ч", 24 * 60: "Завтра"}
+
+
+def snooze_options(usual: int | None) -> list[tuple[int, str]]:
+    """Три варианта «отложить»; привычный пользователю — первым (добавляется, если его нет среди стандартных)."""
+    if usual is None or usual not in SNOOZE_LABELS:
+        return SNOOZE_OPTIONS
+    rest = [o for o in SNOOZE_OPTIONS if o[0] != usual]
+    return [(usual, SNOOZE_LABELS[usual])] + rest[:2]
 
 
 def task_card(task: Task, tz: str, auto_time: bool = False) -> str:
@@ -276,10 +285,10 @@ def review_messages(review: Review, tz: str) -> list[tuple[str, InlineKeyboardMa
     return messages
 
 
-def reminder_kb(task: Task) -> InlineKeyboardMarkup:
+def reminder_kb(task: Task, usual_snooze: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Сделано", callback_data=TaskAction(action="done", task_id=task.id))
-    for minutes, label in SNOOZE_OPTIONS:
+    for minutes, label in snooze_options(usual_snooze):
         kb.button(text=label, callback_data=TaskAction(action="snooze", task_id=task.id, minutes=minutes))
     kb.adjust(1, 3)
     return kb.as_markup()

@@ -12,6 +12,7 @@ from pim.agent.tools import FORWARD_MARK, TOOLS, ToolContext, memory_view, run_t
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import WEEKDAYS_RU, to_local
+from pim.learning.timing import TimeProfile, load_profile
 from pim.llm.base import Image, LLMProvider, Message
 
 log = logging.getLogger(__name__)
@@ -104,7 +105,7 @@ class Agent:
             lines.append(f"🗑 Забыл факт {n}: {memory.content}" if memory else f"Факта {n} нет в памяти")
         return AgentReply(text="\n".join(lines))
 
-    async def _system_message(self, user: User) -> Message:
+    async def _system_message(self, user: User, profile: TimeProfile) -> Message:
         tasks = await self._repo.list_open_tasks(user.id)
         memories = await self._repo.list_memories(user.id)
         tasks_block = "\n".join(json.dumps(task_view(t, user.timezone), ensure_ascii=False) for t in tasks)
@@ -114,6 +115,7 @@ class Agent:
         return Message("system", build_system_prompt(
             to_local(utcnow(), user.timezone), user.timezone, user.digest_time, tasks_block, memories_block,
             auto_memory=user.auto_memory, review_time=user.review_time, lists_block=lists_block,
+            habits_block="\n".join(profile.prompt_lines()),
         ))
 
     async def _handle(self, user: User, text: str, reference_time: datetime | None = None,
@@ -128,11 +130,12 @@ class Agent:
                    images: list[Image]) -> AgentReply:
         history = await self.history.get(user.id)
         prev_assistant = next((m.content for m in reversed(history) if m.role == "assistant"), "")
+        profile = await load_profile(self._repo, user)
         ctx = ToolContext(repo=self._repo, user=user, user_text=text, prev_assistant=prev_assistant,
-                          max_memories=self._max_memories, reference_time=reference_time)
+                          max_memories=self._max_memories, reference_time=reference_time, profile=profile)
         # в историю уходит только текст (с пометкой «[Фото…]»), сама картинка — только в этот ход
         user_msg = Message("user", text, images=images)
-        messages = [await self._system_message(user), *history, user_msg]
+        messages = [await self._system_message(user, profile), *history, user_msg]
 
         reply = ""
         for _ in range(MAX_STEPS):

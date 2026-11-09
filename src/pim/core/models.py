@@ -161,3 +161,24 @@ class DateAlert(Base):
     occurrence: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD наступления
     lead_days: Mapped[int] = mapped_column()
     sent_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class TaskEventKind(StrEnum):
+    REMINDED = "reminded"    # бот прислал напоминание
+    DONE = "done"            # отметил сделанным (minutes — через сколько после напоминания, если было)
+    SNOOZED = "snoozed"      # отложил (minutes — на сколько)
+    CANCELLED = "cancelled"  # удалил
+    PLANNED = "planned"      # сам назначил время (at — на когда) — его предпочтения по часам
+
+
+class TaskEvent(Base):
+    """Журнал поведения пользователя с делами — из него pim/learning/timing.py выводит привычки по времени."""
+
+    __tablename__ = "task_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    task_id: Mapped[int | None] = mapped_column()
+    kind: Mapped[TaskEventKind] = mapped_column(String(16))
+    at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    minutes: Mapped[int | None] = mapped_column()

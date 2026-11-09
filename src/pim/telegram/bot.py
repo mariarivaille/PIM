@@ -30,9 +30,10 @@ class TelegramNotifier:
     def __init__(self, bot: Bot):
         self._bot = bot
 
-    async def send_reminder(self, user: User, task: Task) -> None:
+    async def send_reminder(self, user: User, task: Task, usual_snooze: int | None = None) -> None:
         await self._bot.send_message(
-            user.chat_id, "🔔 Напоминаю\n\n" + task_card(task, user.timezone), reply_markup=reminder_kb(task)
+            user.chat_id, "🔔 Напоминаю\n\n" + task_card(task, user.timezone),
+            reply_markup=reminder_kb(task, usual_snooze),
         )
 
     async def send_digest(self, user: User, digest: Digest) -> None:

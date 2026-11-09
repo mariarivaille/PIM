@@ -8,6 +8,9 @@ SYSTEM_PROMPT = """\
 Сейчас: {now} ({weekday}), часовой пояс пользователя: {tz}.
 Утренняя сводка дел: {digest}. Вечерний разбор «что переносим?»: {review}.
 
+Привычки пользователя по времени (выведены из истории; учитывай, когда выбираешь время сам):
+{habits}
+
 Календарь на ближайшие дни (для ответов пользователю и для due_at):
 {calendar}
 
@@ -112,8 +115,9 @@ AUTO_MEMORY_OFF = (
 
 def build_system_prompt(now_local: datetime, tz: str, digest_time: str | None, tasks_block: str,
                         memories_block: str = "", auto_memory: bool = True, review_time: str | None = None,
-                        lists_block: str = "") -> str:
+                        lists_block: str = "", habits_block: str = "") -> str:
     return SYSTEM_PROMPT.format(
+        habits=habits_block or "(пока мало данных)",
         lists=lists_block or "(пока нет)",
         review=f"в {review_time}" if review_time else "выключен",
         auto_memory="включено" if auto_memory else "выключено",

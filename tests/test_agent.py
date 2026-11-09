@@ -84,7 +84,7 @@ async def test_scheduler_sends_once(repo, user):
     sent = []
 
     class FakeNotifier:
-        async def send_reminder(self, u, t):
+        async def send_reminder(self, u, t, usual_snooze=None):
             sent.append(t.id)
 
     t = await repo.create_task(user.id, "x", due_at=utcnow() - timedelta(seconds=1))

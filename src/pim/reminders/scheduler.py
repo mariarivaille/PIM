@@ -6,6 +6,7 @@ from typing import Protocol
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
+from pim.learning.timing import TimeProfile, load_profile
 from pim.memory.reflection import Reflector
 from pim.reminders.digest import Digest, build_digest, digest_due
 from pim.reminders.dates import UpcomingDate, alerts_for_today, dates_due, occurrence_key, user_upcoming_dates
@@ -19,7 +20,7 @@ REFLECTION_RETRY = timedelta(minutes=10)
 class Notifier(Protocol):
     """Канал доставки: Telegram, позже push в приложение и т.п."""
 
-    async def send_reminder(self, user: User, task: Task) -> None: ...
+    async def send_reminder(self, user: User, task: Task, usual_snooze: int | None = None) -> None: ...
 
     async def send_digest(self, user: User, digest: Digest) -> None: ...
 
@@ -44,9 +45,12 @@ class ReminderScheduler:
     async def tick(self) -> int:
         now = utcnow()
         sent = 0
+        profiles: dict[int, TimeProfile] = {}
         for task, user in await self._repo.due_tasks(now):
+            if user.id not in profiles:
+                profiles[user.id] = await load_profile(self._repo, user, now)
             try:
-                await self._notifier.send_reminder(user, task)
+                await self._notifier.send_reminder(user, task, usual_snooze=profiles[user.id].usual_snooze)
             except Exception:
                 # не помечаем — попробуем на следующем тике
                 log.exception("failed to send reminder for task %s", task.id)
