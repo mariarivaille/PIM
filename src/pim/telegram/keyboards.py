@@ -5,17 +5,26 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from pim.core.models import Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
-from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, to_local
+from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
 from pim.reminders.digest import Digest
+from pim.reminders.review import Review
 
 # Лимит Telegram 4096 символов, оставляем запас на разметку
 MAX_MESSAGE_CHARS = 3800
 
 
 class TaskAction(CallbackData, prefix="t"):
-    action: str  # done | cancel | snooze
+    action: str  # done | cancel | snooze | tomorrow
     task_id: int
     minutes: int = 0
+
+
+class ReviewAction(CallbackData, prefix="r"):
+    action: str  # all_tomorrow
+
+
+# Сколько дел показывать карточками в вечернем разборе; остальное — в /tasks
+MAX_REVIEW_CARDS = 10
 
 
 MEMORY_SECTIONS = [
@@ -123,6 +132,37 @@ def created_kb(task: Task) -> InlineKeyboardMarkup:
     kb.button(text="✅ Сделано", callback_data=TaskAction(action="done", task_id=task.id))
     kb.button(text="🗑 Удалить", callback_data=TaskAction(action="cancel", task_id=task.id))
     return kb.as_markup()
+
+
+def review_kb(task: Task) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Сделано", callback_data=TaskAction(action="done", task_id=task.id))
+    kb.button(text="➡️ На завтра", callback_data=TaskAction(action="tomorrow", task_id=task.id))
+    kb.button(text="🗑", callback_data=TaskAction(action="cancel", task_id=task.id))
+    kb.adjust(3)
+    return kb.as_markup()
+
+
+def _tasks_word(n: int) -> str:
+    return f"{n} {plural_ru(n, 'дело', 'дела', 'дел')}"
+
+
+def review_messages(review: Review, tz: str) -> list[tuple[str, InlineKeyboardMarkup | None]]:
+    """Вечерний разбор: заголовок (с «перенести всё», если дел несколько) и карточка на каждое дело."""
+    done = f" Сделано за день: {_tasks_word(review.done_today)} 💪" if review.done_today else ""
+    if not review.pending:
+        return [(f"🌙 Все дела на сегодня закрыты 🎉{done}", None)]
+    header = [f"🌙 <b>Вечерний разбор</b>\nНе закрыто: {_tasks_word(len(review.pending))}.{done}\nЧто с ними?"]
+    if len(review.pending) > MAX_REVIEW_CARDS:
+        header.append(f"Показываю первые {MAX_REVIEW_CARDS}, остальные — в /tasks.")
+    kb = None
+    if len(review.pending) > 1:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="➡️ Перенести всё на завтра", callback_data=ReviewAction(action="all_tomorrow"))
+        kb = builder.as_markup()
+    messages = [("\n".join(header), kb)]
+    messages += [(task_card(t, tz), review_kb(t)) for t in review.pending[:MAX_REVIEW_CARDS]]
+    return messages
 
 
 def reminder_kb(task: Task) -> InlineKeyboardMarkup:

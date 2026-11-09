@@ -47,12 +47,16 @@ async def build_digest(repo: Repository, user: User, now: datetime) -> Digest:
     return digest
 
 
-def digest_due(user: User, now: datetime) -> bool:
-    """Пора ли слать сводку: наступило время, ещё не слали сегодня, не опоздали больше чем на окно."""
-    if not user.digest_time:
+def daily_due(at: str | None, last_on: str | None, tz: str, now: datetime) -> bool:
+    """Пора ли ежедневная рассылка: наступило время `at`, сегодня ещё не слали, не опоздали больше чем на окно."""
+    if not at:
         return False
-    local_now = to_local(now, user.timezone)
-    if user.last_digest_on == local_now.date().isoformat():
+    local_now = to_local(now, tz)
+    if last_on == local_now.date().isoformat():
         return False
-    scheduled = datetime.combine(local_now.date(), parse_hhmm(user.digest_time), tzinfo=ZoneInfo(user.timezone))
+    scheduled = datetime.combine(local_now.date(), parse_hhmm(at), tzinfo=ZoneInfo(tz))
     return scheduled <= local_now < scheduled + CATCH_UP_WINDOW
+
+
+def digest_due(user: User, now: datetime) -> bool:
+    return daily_due(user.digest_time, user.last_digest_on, user.timezone, now)

@@ -79,7 +79,7 @@ async def test_set_digest_time_tool(repo, user):
     assert (await run_tool(ctx, "set_digest_time", {"time": "8:30"}))["digest_time"] == "08:30"
     assert (await repo.get_user(user.id)).digest_time == "08:30"
     assert "error" in await run_tool(ctx, "set_digest_time", {"time": "утром"})
-    assert (await run_tool(ctx, "set_digest_time", {"time": "off"}))["digest"] == "off"
+    assert (await run_tool(ctx, "set_digest_time", {"time": "off"}))["digest_time"] == "off"
     assert [u.id for u in await repo.users_with_digest()] == []
 
 

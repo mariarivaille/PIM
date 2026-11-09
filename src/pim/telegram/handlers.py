@@ -13,12 +13,15 @@ from pim.core.models import utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import format_local
 from pim.reminders.digest import build_digest
+from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpone_to_tomorrow
 from pim.stt.base import Transcriber
 from pim.telegram.keyboards import (
+    ReviewAction,
     TaskAction,
     created_kb,
     format_digest,
     memory_list,
+    review_messages,
     task_card,
 )
 
@@ -50,15 +53,18 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     async def start(message: Message):
         user = await ensure_user(message)
         digest = f"в {user.digest_time}" if user.digest_time else "выключена"
+        review_at = f"в {user.review_time}" if user.review_time else "выключен"
         await message.answer(
             "Привет! Я Pim. Пиши или наговаривай мне дела — я запишу и напомню.\n"
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
             "Запоминаю важное о тебе: сам из разговоров или по просьбе — «запомни, что мама — Ольга, ДР 12 марта». "
             "Посмотреть — /memory, удалить — «удали факт 3».\n\n"
-            "/tasks — список дел\n/digest — сводка на сегодня\n/memory — что я о тебе знаю\n"
+            "/tasks — список дел\n/digest — сводка на сегодня\n/review — что переносим?\n"
+            "/memory — что я о тебе знаю\n"
             "/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
-            "(«присылай сводку в 8:30» / «не присылай сводку»)"
+            "(«присылай сводку в 8:30» / «не присылай сводку»)\n"
+            f"Вечерний разбор: {review_at} («разбор в 22:00» / «не нужен вечерний разбор»)"
         )
 
     @router.message(Command("digest"))
@@ -66,6 +72,24 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         user = await ensure_user(message)
         d = await build_digest(repo, user, utcnow())
         await message.answer(format_digest(d, user.timezone))
+
+    @router.message(Command("review"))
+    async def review(message: Message):
+        user = await ensure_user(message)
+        r = await build_review(repo, user, utcnow())
+        if not r.should_send:
+            await message.answer("На сегодня дел со сроком не было — разбирать нечего.")
+            return
+        for text, kb in review_messages(r, user.timezone):
+            await message.answer(text, reply_markup=kb)
+
+    @router.callback_query(ReviewAction.filter(F.action == "all_tomorrow"))
+    async def on_review_all(cb: CallbackQuery):
+        user = await ensure_user(cb)
+        moved = await postpone_all_to_tomorrow(repo, user, utcnow())
+        text = (f"➡️ Перенёс на завтра: {len(moved)}" if moved else "Переносить уже нечего — всё разобрано 👍")
+        await cb.message.edit_text(f"{cb.message.html_text}\n\n{text}", reply_markup=None)
+        await cb.answer()
 
     @router.message(Command("tasks"))
     async def tasks(message: Message):
@@ -161,6 +185,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         elif callback_data.action == "cancel":
             task = await repo.cancel_task(user.id, tid)
             note = "🗑 Удалено"
+        elif callback_data.action == "tomorrow":
+            task = await postpone_to_tomorrow(repo, user, tid, utcnow())
+            note = f"➡️ Перенёс на {format_local(task.due_at, user.timezone)}" if task else ""
         elif callback_data.action == "snooze":
             until = utcnow() + timedelta(minutes=callback_data.minutes)
             task = await repo.snooze_task(user.id, tid, until)

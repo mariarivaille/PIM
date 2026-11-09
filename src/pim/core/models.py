@@ -46,6 +46,9 @@ class User(Base):
     digest_time: Mapped[str | None] = mapped_column(String(5), default="09:00", server_default="09:00")
     # Локальная дата (YYYY-MM-DD) последней отправленной сводки — чтобы не слать дважды
     last_digest_on: Mapped[str | None] = mapped_column(String(10))
+    # Локальное время вечернего разбора «что переносим?» "HH:MM"; None = выключен
+    review_time: Mapped[str | None] = mapped_column(String(5), default="21:00", server_default="21:00")
+    last_review_on: Mapped[str | None] = mapped_column(String(10))
     # Реплики раньше этого момента не попадают в контекст диалога (/reset)
     context_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Последний выданный номер факта в памяти (у каждого пользователя своя нумерация)

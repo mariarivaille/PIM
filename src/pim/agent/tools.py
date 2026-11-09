@@ -206,6 +206,9 @@ async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, 
     task = await _get(ctx, task_id)
     fields: dict[str, Any] = {}
     auto = False
+    if day and not (time or due_at or in_minutes) and task.due_at:
+        # «перенеси на пятницу» — другой день, но то же время, что было у дела
+        time = to_local(task.due_at, ctx.user.timezone).strftime("%H:%M")
     if title:
         fields["title"] = title
     if time and not (day or due_at or in_minutes) and task.due_at:
@@ -253,20 +256,29 @@ async def set_timezone(ctx: ToolContext, timezone: str) -> dict:
     return {"timezone": timezone}
 
 
-async def set_digest_time(ctx: ToolContext, time: str) -> dict:
-    value = time.strip().lower()
+def _daily_time(value: str) -> str | None:
+    """«08:30» / «8:30» -> "08:30"; «off» -> None (выключить)."""
+    value = value.strip().lower()
     if value in ("off", "", "выкл"):
-        await ctx.repo.set_digest_time(ctx.user.id, None)
-        ctx.user.digest_time = None
-        return {"digest": "off"}
+        return None
     try:
-        parsed = parse_hhmm(value)
+        return parse_hhmm(value).strftime("%H:%M")
     except ValueError as e:
-        raise ToolError(f"время сводки нужно в формате HH:MM, получено {time!r}") from e
-    normalized = parsed.strftime("%H:%M")
+        raise ToolError(f"время нужно в формате HH:MM или off, получено {value!r}") from e
+
+
+async def set_digest_time(ctx: ToolContext, time: str) -> dict:
+    normalized = _daily_time(time)
     await ctx.repo.set_digest_time(ctx.user.id, normalized)
     ctx.user.digest_time = normalized
-    return {"digest_time": normalized}
+    return {"digest_time": normalized or "off"}
+
+
+async def set_review_time(ctx: ToolContext, time: str) -> dict:
+    normalized = _daily_time(time)
+    await ctx.repo.set_review_time(ctx.user.id, normalized)
+    ctx.user.review_time = normalized
+    return {"review_time": normalized or "off"}
 
 
 # --- память ---
@@ -480,6 +492,15 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                                           "description": "Локальное время HH:MM, например 08:30, или off чтобы выключить"}},
                   "required": ["time"]}),
         set_digest_time,
+    ),
+    "set_review_time": (
+        ToolSpec("set_review_time",
+                 "Настроить вечерний разбор «что переносим?» (несделанное за день с кнопками): время или выключить.",
+                 {"type": "object",
+                  "properties": {"time": {"type": "string",
+                                          "description": "Локальное время HH:MM, например 22:00, или off чтобы выключить"}},
+                  "required": ["time"]}),
+        set_review_time,
     ),
     "remember": (
         ToolSpec(

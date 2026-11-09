@@ -8,6 +8,7 @@ from pim.core.repository import Repository
 from pim.core.timeutils import to_local
 from pim.memory.reflection import Reflector
 from pim.reminders.digest import Digest, build_digest, digest_due
+from pim.reminders.review import Review, build_review, review_due
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ class Notifier(Protocol):
     async def send_reminder(self, user: User, task: Task) -> None: ...
 
     async def send_digest(self, user: User, digest: Digest) -> None: ...
+
+    async def send_review(self, user: User, review: Review) -> None: ...
 
 
 class ReminderScheduler:
@@ -64,6 +67,25 @@ class ReminderScheduler:
             sent += 1
         return sent
 
+    async def tick_reviews(self) -> int:
+        """Вечерний разбор: несделанное за сегодня — с кнопками «сделано / на завтра / удалить»."""
+        now = utcnow()
+        sent = 0
+        for user in await self._repo.users_with_review():
+            if not review_due(user, now):
+                continue
+            review = await build_review(self._repo, user, now)
+            if review.should_send:
+                try:
+                    await self._notifier.send_review(user, review)
+                except Exception:
+                    log.exception("failed to send review to user %s", user.id)
+                    continue
+                sent += 1
+            # и когда разбирать нечего — помечаем день, чтобы не проверять каждые 30 секунд
+            await self._repo.mark_review_sent(user.id, to_local(now, user.timezone).date().isoformat())
+        return sent
+
     async def tick_reflection(self) -> int:
         """Разбирает затихшие разговоры и молча обновляет память (пользователь видит её только в /memory)."""
         if self._reflector is None:
@@ -87,7 +109,7 @@ class ReminderScheduler:
     async def run_forever(self) -> None:
         log.info("reminder scheduler started, poll every %ss", self._poll)
         while True:
-            for job in (self.tick, self.tick_digests, self.tick_reflection):
+            for job in (self.tick, self.tick_digests, self.tick_reviews, self.tick_reflection):
                 try:
                     await job()
                 except Exception:

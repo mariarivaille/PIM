@@ -98,7 +98,7 @@ class Agent:
         memories_block = "\n".join(json.dumps(memory_view(m, user.timezone), ensure_ascii=False) for m in memories)
         return Message("system", build_system_prompt(
             to_local(utcnow(), user.timezone), user.timezone, user.digest_time, tasks_block, memories_block,
-            auto_memory=user.auto_memory,
+            auto_memory=user.auto_memory, review_time=user.review_time,
         ))
 
     async def _handle(self, user: User, text: str, reference_time: datetime | None = None) -> AgentReply:

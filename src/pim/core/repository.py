@@ -50,6 +50,32 @@ class Repository:
             if user:
                 user.digest_time = value
 
+    async def set_review_time(self, user_id: int, value: str | None) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.review_time = value
+
+    async def users_with_review(self) -> list[User]:
+        async with self._sm() as s:
+            return list(await s.scalars(select(User).where(User.review_time.is_not(None))))
+
+    async def mark_review_sent(self, user_id: int, local_date: str) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.last_review_on = local_date
+
+    async def count_completed(self, user_id: int, since: datetime, until: datetime) -> int:
+        """Сколько дел пользователь закрыл (сделано) в интервале."""
+        async with self._sm() as s:
+            return await s.scalar(
+                select(func.count()).select_from(Task).where(
+                    Task.user_id == user_id, Task.status == TaskStatus.DONE,
+                    Task.completed_at >= since, Task.completed_at < until,
+                )
+            )
+
     async def users_with_digest(self) -> list[User]:
         async with self._sm() as s:
             return list(await s.scalars(select(User).where(User.digest_time.is_not(None))))
