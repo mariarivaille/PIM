@@ -4,21 +4,24 @@
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from datetime import timezone as dt_timezone
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
 
-from pim.core.models import Task, User, utcnow
+from pim.core.models import Memory, MemoryKind, MemorySource, Task, User, utcnow
 from pim.core.repository import Repository
-from pim.core.timeutils import DAY_KEYWORDS, format_local, parse_local, resolve_day_time, to_local
+from pim.core.timeutils import DAY_KEYWORDS, DEFAULT_TIME, format_local, parse_local, resolve_day_time, to_local
 from pim.llm.base import ToolSpec
 from pim.reminders.digest import parse_hhmm
 
 log = logging.getLogger(__name__)
+
+END_OF_DAY = dt_time(23, 59, 59)
 
 
 @dataclass
@@ -27,6 +30,28 @@ class ToolContext:
     user: User
     # задачи, созданные/изменённые за этот ход — телеграм-слой покажет по ним карточки с кнопками
     touched: list[Task] = field(default_factory=list)
+    # записи памяти, созданные/исправленные за ход — телеграм-слой покажет «📌 Запомнил» с кнопкой «Забыть»
+    remembered: list[Memory] = field(default_factory=list)
+    # текст сообщения пользователя и предыдущий ответ бота: по ним проверяем, просил ли он что-то запомнить
+    user_text: str = ""
+    prev_assistant: str = ""
+
+
+# Явная просьба запомнить. Пока бот запоминает только по команде — модели (GigaChat) правило из промпта
+# соблюдают ненадёжно, поэтому проверяем в коде. «\bпомни\b», а не «помни», чтобы не ловить «напомни».
+EXPLICIT_MEMORY_REQUEST = re.compile(
+    r"запомн|запиши себе|сохрани|\bучти|учитывай|имей(те)? в ?виду|\bзнай|\bпомни\b|не забывай",
+    re.IGNORECASE,
+)
+# Бот сам предлагает «Запомнить это?», и короткое согласие на это тоже считается просьбой
+MEMORY_OFFER = "Запомнить это?"
+AFFIRMATIVE = re.compile(r"^\s*(да|ага|угу|давай|конечно|ок|окей|можно|ну да|yes)\b", re.IGNORECASE)
+
+
+def memory_requested(ctx: "ToolContext") -> bool:
+    if EXPLICIT_MEMORY_REQUEST.search(ctx.user_text):
+        return True
+    return MEMORY_OFFER.lower() in ctx.prev_assistant.lower() and bool(AFFIRMATIVE.match(ctx.user_text))
 
 
 class ToolError(Exception):
@@ -48,9 +73,13 @@ def _parse_due(ctx: ToolContext, value: str | None):
     if not value:
         return None
     try:
-        return parse_local(value, ctx.user.timezone)
+        local = datetime.fromisoformat(value)
     except ValueError as e:
         raise ToolError(f"due_at должен быть ISO 8601, например 2026-10-30T15:00, получено {value!r}") from e
+    # Только дата или ровно полночь — модель не знала время: ставим как «просто день», а не будим в 00:00
+    if "T" not in value or (local.hour, local.minute, local.second) == (0, 0, 0):
+        local = local.replace(hour=DEFAULT_TIME.hour, minute=DEFAULT_TIME.minute, second=0)
+    return parse_local(local.isoformat(), ctx.user.timezone)
 
 
 def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: str | None,
@@ -175,12 +204,87 @@ async def set_digest_time(ctx: ToolContext, time: str) -> dict:
     return {"digest_time": normalized}
 
 
+# --- память ---
+
+
+def memory_view(memory: Memory, tz: str) -> dict[str, Any]:
+    view = {"id": memory.id, "kind": memory.kind, "content": memory.content}
+    if memory.expires_at:
+        view["until"] = format_local(memory.expires_at, tz)
+    return view
+
+
+def _resolve_until(ctx: ToolContext, until_day: str | None, until_date: str | None) -> datetime | None:
+    """Конец указанного локального дня: до него временный факт считается актуальным."""
+    if until_date:
+        try:
+            day = date.fromisoformat(until_date)
+        except ValueError as e:
+            raise ToolError(f"until_date нужен в формате YYYY-MM-DD, получено {until_date!r}") from e
+        local = datetime.combine(day, END_OF_DAY, tzinfo=ZoneInfo(ctx.user.timezone))
+        return local.astimezone(dt_timezone.utc)
+    if until_day:
+        if until_day not in DAY_KEYWORDS:
+            raise ToolError(f"until_day должен быть одним из {DAY_KEYWORDS}, получено {until_day!r}")
+        return resolve_day_time(utcnow(), ctx.user.timezone, until_day, END_OF_DAY)
+    return None
+
+
+def _check_kind(kind: str | None) -> MemoryKind:
+    try:
+        return MemoryKind(kind or MemoryKind.FACT)
+    except ValueError as e:
+        raise ToolError(f"kind должен быть одним из {[k.value for k in MemoryKind]}, получено {kind!r}") from e
+
+
+async def remember(ctx: ToolContext, content: str, kind: str | None = None, until_day: str | None = None,
+                   until_date: str | None = None) -> dict:
+    content = content.strip()
+    if not content:
+        raise ToolError("пустой content")
+    if not memory_requested(ctx):
+        raise ToolError(
+            "пользователь не просил запомнить — в память пишем только по явной просьбе. Ничего не сохраняй; "
+            f"если факт выглядит важным, в конце ответа коротко предложи: «{MEMORY_OFFER}»"
+        )
+    memory = await ctx.repo.add_memory(
+        ctx.user.id, content, kind=_check_kind(kind), source=MemorySource.EXPLICIT,
+        expires_at=_resolve_until(ctx, until_day, until_date),
+    )
+    ctx.remembered.append(memory)
+    return {"remembered": memory_view(memory, ctx.user.timezone)}
+
+
+async def update_memory(ctx: ToolContext, memory_id: int, content: str | None = None, kind: str | None = None,
+                        until_day: str | None = None, until_date: str | None = None) -> dict:
+    if not await ctx.repo.get_memory(ctx.user.id, int(memory_id)):
+        raise ToolError(f"запись памяти {memory_id} не найдена")
+    fields: dict[str, Any] = {}
+    if content and content.strip():
+        fields["content"] = content.strip()
+    if kind:
+        fields["kind"] = _check_kind(kind)
+    if until_day or until_date:
+        fields["expires_at"] = _resolve_until(ctx, until_day, until_date)
+    memory = await ctx.repo.update_memory(ctx.user.id, int(memory_id), **fields)
+    ctx.remembered.append(memory)
+    return {"updated": memory_view(memory, ctx.user.timezone)}
+
+
+async def forget(ctx: ToolContext, memory_id: int) -> dict:
+    memory = await ctx.repo.delete_memory(ctx.user.id, int(memory_id))
+    if not memory:
+        raise ToolError(f"запись памяти {memory_id} не найдена")
+    return {"forgotten": memory.content}
+
+
 # --- specs ---
 
 _DUE = {
     "type": "string",
     "description": "Только для конкретной календарной даты («15 декабря в 18»): локальное время в ISO 8601 "
-                   "без смещения, например 2026-12-15T18:00. Для «завтра», «в пятницу» используй day+time.",
+                   "без смещения, например 2026-12-15T18:00. Если время не названо — только дата: 2026-12-15. "
+                   "Для «завтра», «в пятницу» используй day+time.",
 }
 _DAY = {
     "type": "string",
@@ -196,6 +300,20 @@ _RRULE = {
                    "Только для повторяющихся дел.",
 }
 _ID = {"type": "integer", "description": "id задачи"}
+_MEMORY_ID = {"type": "integer", "description": "id записи памяти"}
+_KIND = {
+    "type": "string",
+    "enum": [k.value for k in MemoryKind],
+    "description": "person — люди и отношения; preference — предпочтения; routine — распорядок и привычки; "
+                   "fact — прочее о пользователе",
+}
+_UNTIL_DAY = {
+    "type": "string",
+    "enum": DAY_KEYWORDS,
+    "description": "Только для временного факта: до какого дня он актуален (включительно), например «на этой "
+                   "неделе в отпуске» → sun. Без этого поля факт бессрочный.",
+}
+_UNTIL_DATE = {"type": "string", "description": "Как until_day, но конкретной датой YYYY-MM-DD"}
 
 Handler = Callable[..., Awaitable[dict]]
 
@@ -270,6 +388,49 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                                           "description": "Локальное время HH:MM, например 08:30, или off чтобы выключить"}},
                   "required": ["time"]}),
         set_digest_time,
+    ),
+    "remember": (
+        ToolSpec(
+            "remember",
+            "Сохранить в долговременную память факт о пользователе. Только когда пользователь явно просит "
+            "(«запомни», «учти», «имей в виду», «знай, что»). Дела и напоминания сюда не пишутся — для них create_task.",
+            {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string",
+                                "description": "Факт одной фразой от третьего лица, например «Мама — Ольга, ДР 12 марта»"},
+                    "kind": _KIND,
+                    "until_day": _UNTIL_DAY,
+                    "until_date": _UNTIL_DATE,
+                },
+                "required": ["content"],
+            },
+        ),
+        remember,
+    ),
+    "update_memory": (
+        ToolSpec(
+            "update_memory",
+            "Исправить сохранённый факт, если пользователь уточнил или он изменился. Используй вместо remember, "
+            "когда о том же уже есть запись в памяти.",
+            {
+                "type": "object",
+                "properties": {
+                    "memory_id": _MEMORY_ID,
+                    "content": {"type": "string", "description": "Новая формулировка факта"},
+                    "kind": _KIND,
+                    "until_day": _UNTIL_DAY,
+                    "until_date": _UNTIL_DATE,
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        update_memory,
+    ),
+    "forget": (
+        ToolSpec("forget", "Удалить факт из памяти, если пользователь просит забыть или он больше не верен.",
+                 {"type": "object", "properties": {"memory_id": _MEMORY_ID}, "required": ["memory_id"]}),
+        forget,
     ),
 }
 

@@ -58,3 +58,13 @@ async def test_update_time_only_keeps_day(repo, user):
     await run_tool(ctx, "update_task", {"task_id": task.id, "time": "12:00"})
     updated = to_local((await repo.get_task(user.id, task.id)).due_at, TZ)
     assert updated.isoformat().startswith("2030-01-10T12:00")
+
+
+async def test_due_at_without_time_defaults_to_10(repo, user):
+    ctx = ToolContext(repo, user)
+    for value in ("2030-03-11", "2030-03-11T00:00:00"):
+        await run_tool(ctx, "create_task", {"title": value, "due_at": value})
+    explicit = await run_tool(ctx, "create_task", {"title": "x", "due_at": "2030-03-11T18:30"})
+    hours = [to_local(t.due_at, TZ).strftime("%H:%M") for t in ctx.touched]
+    assert hours == ["10:00", "10:00", "18:30"]
+    assert explicit["created"]["due"].endswith("18:30")

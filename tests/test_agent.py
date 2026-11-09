@@ -1,6 +1,8 @@
+from datetime import timedelta
+
 from pim.agent.agent import Agent, History
 from pim.agent.tools import ToolContext, run_tool
-from pim.core.models import TaskStatus
+from pim.core.models import TaskStatus, utcnow
 from pim.llm.base import Message, ToolCall
 from pim.llm.gigachat import GigaChatProvider
 from pim.reminders.scheduler import ReminderScheduler
@@ -26,7 +28,7 @@ async def test_agent_creates_task_via_tool(repo, user):
                                                   {"title": "позвонить маме", "due_at": "2030-01-10T15:00"})]),
         Message("assistant", "Записал: позвонить маме, чт 10.01 15:00"),
     ])
-    agent = Agent(llm, repo, History(10))
+    agent = Agent(llm, repo, History(repo, 10))
     reply = await agent.handle(user, "в четверг 10 января в 15 позвонить маме")
 
     assert reply.text.startswith("Записал")
@@ -36,20 +38,32 @@ async def test_agent_creates_task_via_tool(repo, user):
     # результат инструмента ушёл модели во втором запросе
     assert llm.calls[1][-1].role == "tool"
     # история хранит только текст
-    assert [m.role for m in agent.history.get(user.id)] == ["user", "assistant"]
+    assert [m.role for m in await agent.history.get(user.id)] == ["user", "assistant"]
 
 
-def test_history_expires_after_ttl():
-    now = [0.0]
-    h = History(10, ttl_seconds=60, clock=lambda: now[0])
-    h.add(1, Message("user", "a"), Message("assistant", "b"))
-    now[0] = 59
-    assert len(h.get(1)) == 2
-    h.add(1, Message("user", "c"))  # активность продлевает жизнь истории
-    now[0] = 59 + 61
-    assert h.get(1) == []
-    h.add(1, Message("user", "d"))
-    assert [m.content for m in h.get(1)] == ["d"]
+async def test_history_expires_after_ttl(repo, user):
+    start = utcnow()
+    now = [start]
+    h = History(repo, 10, ttl_seconds=60, clock=lambda: now[0])
+    await h.add(user.id, Message("user", "a"), Message("assistant", "b"))
+    now[0] = start + timedelta(seconds=59)
+    assert len(await h.get(user.id)) == 2
+    await h.add(user.id, Message("user", "c"))  # активность продлевает жизнь истории
+    now[0] = start + timedelta(seconds=59 + 61)
+    assert await h.get(user.id) == []
+    await h.add(user.id, Message("user", "d"))
+    # после паузы в контекст попадает только свежая реплика — старые остаются в БД, но не мешают
+    assert [m.content for m in await h.get(user.id)][-1] == "d"
+
+
+async def test_history_survives_restart_and_reset(repo, user):
+    await History(repo, 10).add(user.id, Message("user", "привет"), Message("assistant", "привет!"))
+    fresh = History(repo, 10)  # новый объект = перезапуск бота
+    assert [m.content for m in await fresh.get(user.id)] == ["привет", "привет!"]
+    await fresh.clear(user.id)
+    assert await fresh.get(user.id) == []
+    await fresh.add(user.id, Message("user", "новое"))
+    assert [m.content for m in await fresh.get(user.id)] == ["новое"]
 
 
 async def test_tool_errors_are_returned_to_model(repo, user):

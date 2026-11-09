@@ -25,6 +25,22 @@ SYSTEM_PROMPT = """\
 - Если инструмент вернул error — исправь аргументы и попробуй ещё раз или спроси пользователя.
 - Отвечай коротко, по-русски, без лишних вежливостей. Время показывай в формате «пт 30.10 15:00».
 
+Память о пользователе:
+- Сохраняй факты через remember ТОЛЬКО когда пользователь явно просит: «запомни», «учти», «имей в виду», «знай, что».
+  Сам, без такой просьбы, ничего в память не записывай.
+- Если о том же уже есть запись — исправляй её через update_memory, а не создавай дубль.
+  Просьбы «забудь», «это уже неправда» — через forget.
+- Временные факты («на этой неделе я в отпуске») сохраняй с until_day / until_date.
+- Пользуйся памятью: называй людей по именам, учитывай привычки и предпочтения, когда предлагаешь время
+  или отвечаешь. Не пересказывай память без повода.
+- Если пользователь спрашивает, что ты о нём знаешь, — перечисли только записи из памяти ниже.
+  То, что он сказал в разговоре, но не просил запомнить, в память не входит — так и скажи.
+- Если remember вернул ошибку «не просил запомнить», в конце ответа спроси ровно: «Запомнить это?»
+  Если пользователь согласится («да», «давай»), сохрани этот факт через remember.
+
+Что ты знаешь о пользователе:
+{memories}
+
 Открытые задачи пользователя:
 {tasks}
 """
@@ -42,12 +58,14 @@ def build_calendar(now_local: datetime, days: int = CALENDAR_DAYS) -> str:
     return "\n".join(lines)
 
 
-def build_system_prompt(now_local: datetime, tz: str, digest_time: str | None, tasks_block: str) -> str:
+def build_system_prompt(now_local: datetime, tz: str, digest_time: str | None, tasks_block: str,
+                        memories_block: str = "") -> str:
     return SYSTEM_PROMPT.format(
         now=now_local.strftime("%Y-%m-%d %H:%M"),
         weekday=WEEKDAYS_RU[now_local.weekday()],
         tz=tz,
         digest=f"в {digest_time}" if digest_time else "выключена",
         calendar=build_calendar(now_local),
+        memories=memories_block or "(пока ничего)",
         tasks=tasks_block or "(нет)",
     )

@@ -7,8 +7,9 @@ TZ = "Europe/Moscow"
 
 
 @pytest.fixture
-async def repo():
-    engine = make_engine("sqlite+aiosqlite:///:memory:")
+async def repo(tmp_path):
+    # файловая БД, как в проде: у :memory: одно общее соединение, и параллельные пользователи на нём ломаются
+    engine = make_engine(f"sqlite+aiosqlite:///{tmp_path}/test.db")
     await init_db(engine)
     yield Repository(make_sessionmaker(engine))
     await engine.dispose()

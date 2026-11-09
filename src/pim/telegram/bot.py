@@ -41,6 +41,7 @@ COMMANDS = [
     BotCommand(command="start", description="Начать и посмотреть настройки"),
     BotCommand(command="tasks", description="Список дел"),
     BotCommand(command="digest", description="План на сегодня"),
+    BotCommand(command="memory", description="Что я о тебе знаю"),
     BotCommand(command="reset", description="Забыть контекст разговора"),
 ]
 

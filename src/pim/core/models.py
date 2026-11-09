@@ -46,7 +46,49 @@ class User(Base):
     digest_time: Mapped[str | None] = mapped_column(String(5), default="09:00", server_default="09:00")
     # Локальная дата (YYYY-MM-DD) последней отправленной сводки — чтобы не слать дважды
     last_digest_on: Mapped[str | None] = mapped_column(String(10))
+    # Реплики раньше этого момента не попадают в контекст диалога (/reset)
+    context_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class MemoryKind(StrEnum):
+    PERSON = "person"          # люди: «мама — Ольга, ДР 12 марта»
+    PREFERENCE = "preference"  # предпочтения: «не беспокоить до 9 утра»
+    ROUTINE = "routine"        # распорядок и привычки: «спортзал вт/чт вечером»
+    FACT = "fact"              # прочее о пользователе: «работаю из дома по пятницам»
+
+
+class MemorySource(StrEnum):
+    EXPLICIT = "explicit"  # пользователь сам попросил запомнить
+    INFERRED = "inferred"  # бот вывел из разговора (следующий шаг)
+
+
+class Memory(Base):
+    """Долговременная память о пользователе: всё это попадает в системный промпт."""
+
+    __tablename__ = "memories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[MemoryKind] = mapped_column(String(16), default=MemoryKind.FACT)
+    content: Mapped[str] = mapped_column(Text)
+    source: Mapped[MemorySource] = mapped_column(String(16), default=MemorySource.EXPLICIT)
+    # Для временных фактов («на этой неделе в отпуске»); None = бессрочно
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class ChatMessage(Base):
+    """История диалога (только текст user/assistant)."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 
 class Task(Base):

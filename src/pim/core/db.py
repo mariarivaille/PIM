@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import inspect
+from sqlalchemy import event, inspect
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateColumn
 
@@ -10,7 +10,17 @@ log = logging.getLogger(__name__)
 
 
 def make_engine(url: str) -> AsyncEngine:
-    return create_async_engine(url)
+    engine = create_async_engine(url)
+    if engine.dialect.name == "sqlite":
+        @event.listens_for(engine.sync_engine, "connect")
+        def _sqlite_pragmas(dbapi_conn, _):
+            # WAL: чтение не блокируется записью; busy_timeout: параллельные записи (несколько пользователей,
+            # планировщик) ждут друг друга, а не падают с «database is locked»
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.close()
+    return engine
 
 
 def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker:

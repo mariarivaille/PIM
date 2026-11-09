@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from pim.core.models import Task, TaskStatus, User, utcnow
+from pim.core.models import ChatMessage, Memory, MemoryKind, MemorySource, Task, TaskStatus, User, utcnow
 from pim.core.timeutils import next_occurrence
 
 
@@ -50,6 +50,73 @@ class Repository:
             user = await s.get(User, user_id)
             if user:
                 user.last_digest_on = local_date
+
+    # --- memories ---
+
+    async def add_memory(self, user_id: int, content: str, kind: MemoryKind = MemoryKind.FACT,
+                         source: MemorySource = MemorySource.EXPLICIT,
+                         expires_at: datetime | None = None) -> Memory:
+        async with self._sm() as s, s.begin():
+            memory = Memory(user_id=user_id, content=content, kind=kind, source=source, expires_at=expires_at)
+            s.add(memory)
+        return memory
+
+    async def get_memory(self, user_id: int, memory_id: int) -> Memory | None:
+        async with self._sm() as s:
+            memory = await s.get(Memory, memory_id)
+            return memory if memory and memory.user_id == user_id else None
+
+    async def list_memories(self, user_id: int, now: datetime | None = None) -> list[Memory]:
+        """Актуальные воспоминания пользователя (истёкшие не возвращаются)."""
+        now = now or utcnow()
+        async with self._sm() as s:
+            res = await s.scalars(
+                select(Memory)
+                .where(Memory.user_id == user_id, or_(Memory.expires_at.is_(None), Memory.expires_at > now))
+                .order_by(Memory.kind, Memory.id)
+            )
+            return list(res)
+
+    async def update_memory(self, user_id: int, memory_id: int, **fields) -> Memory | None:
+        async with self._sm() as s, s.begin():
+            memory = await s.get(Memory, memory_id)
+            if not memory or memory.user_id != user_id:
+                return None
+            for k, v in fields.items():
+                setattr(memory, k, v)
+            return memory
+
+    async def delete_memory(self, user_id: int, memory_id: int) -> Memory | None:
+        async with self._sm() as s, s.begin():
+            memory = await s.get(Memory, memory_id)
+            if not memory or memory.user_id != user_id:
+                return None
+            await s.delete(memory)
+            return memory
+
+    # --- chat history ---
+
+    async def add_messages(self, user_id: int, *items: tuple[str, str], at: datetime | None = None) -> None:
+        async with self._sm() as s, s.begin():
+            at = at or utcnow()
+            s.add_all(ChatMessage(user_id=user_id, role=role, content=content, created_at=at)
+                      for role, content in items)
+
+    async def recent_messages(self, user_id: int, limit: int) -> list[ChatMessage]:
+        """Последние реплики после /reset, в хронологическом порядке."""
+        async with self._sm() as s:
+            user = await s.get(User, user_id)
+            query = select(ChatMessage).where(ChatMessage.user_id == user_id)
+            if user and user.context_since:
+                query = query.where(ChatMessage.created_at > user.context_since)
+            res = await s.scalars(query.order_by(ChatMessage.id.desc()).limit(limit))
+            return list(reversed(list(res)))
+
+    async def reset_context(self, user_id: int, at: datetime | None = None) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.context_since = at or utcnow()
 
     # --- tasks ---
 

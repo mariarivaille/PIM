@@ -28,7 +28,7 @@ async def main() -> None:
     await init_db(engine)
     repo = Repository(make_sessionmaker(engine))
 
-    history = History(settings.history_size, ttl_seconds=settings.history_ttl_minutes * 60)
+    history = History(repo, settings.history_size, ttl_seconds=settings.history_ttl_minutes * 60)
     agent = Agent(make_provider(settings), repo, history)
     transcriber = make_transcriber(settings)
     bot = make_bot(settings)

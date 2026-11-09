@@ -14,7 +14,15 @@ from pim.core.repository import Repository
 from pim.core.timeutils import format_local
 from pim.reminders.digest import build_digest
 from pim.stt.base import Transcriber
-from pim.telegram.keyboards import TaskAction, created_kb, format_digest, task_card
+from pim.telegram.keyboards import (
+    MemoryAction,
+    TaskAction,
+    created_kb,
+    format_digest,
+    memory_card,
+    memory_list,
+    task_card,
+)
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +42,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         await message.answer(
             "Привет! Я Pim. Пиши или наговаривай мне дела — я запишу и напомню.\n"
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
-            "/tasks — список дел\n/digest — сводка на сегодня\n/reset — забыть контекст диалога\n\n"
+            "Могу запомнить важное о тебе: «запомни, что мама — Ольга, ДР 12 марта».\n\n"
+            "/tasks — список дел\n/digest — сводка на сегодня\n/memory — что я о тебе знаю\n"
+            "/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
             "(«присылай сводку в 8:30» / «не присылай сводку»)"
         )
@@ -61,8 +71,15 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
 
     @router.message(Command("reset"))
     async def reset(message: Message):
-        agent.history.clear(message.from_user.id)
-        await message.answer("Контекст диалога очищен.")
+        await ensure_user(message)
+        await agent.history.clear(message.from_user.id)
+        await message.answer("Контекст диалога очищен. Память о тебе и дела не тронуты.")
+
+    @router.message(Command("memory"))
+    async def memory(message: Message):
+        user = await ensure_user(message)
+        text, kb = memory_list(await repo.list_memories(user.id), user.timezone)
+        await message.answer(text, reply_markup=kb)
 
     @router.message(F.text)
     async def on_text(message: Message):
@@ -109,6 +126,25 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         for t in seen.values():
             if t.status == "open":
                 await message.answer(task_card(t, user.timezone), reply_markup=created_kb(t))
+        for m in {m.id: m for m in reply.remembered}.values():
+            text, kb = memory_card(m, user.timezone)
+            await message.answer(text, reply_markup=kb)
+
+    @router.callback_query(MemoryAction.filter())
+    async def on_memory_action(cb: CallbackQuery, callback_data: MemoryAction):
+        user = await ensure_user(cb)
+        memory = await repo.delete_memory(user.id, callback_data.memory_id)
+        if callback_data.action == "forget_list":
+            # перерисовываем список /memory без удалённой записи
+            text, kb = memory_list(await repo.list_memories(user.id), user.timezone)
+            await cb.message.edit_text(text, reply_markup=kb)
+            await cb.answer("Забыл" if memory else "Уже удалено")
+            return
+        if memory is None:
+            await cb.answer("Уже удалено")
+            return
+        await cb.message.edit_text(f"🗑 Забыл: <s>{html.escape(memory.content)}</s>", reply_markup=None)
+        await cb.answer()
 
     @router.callback_query(TaskAction.filter())
     async def on_action(cb: CallbackQuery, callback_data: TaskAction):
