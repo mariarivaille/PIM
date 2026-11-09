@@ -6,6 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from pim.core.models import ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
+from pim.learning.timing import MIN_HOUR_SAMPLES, MIN_SNOOZE_SAMPLES, WINDOW_DAYS, TimeProfile
 from pim.lists.matching import normalize
 from pim.reminders.dates import UpcomingDate, days_until_text
 from pim.reminders.digest import Digest
@@ -283,6 +284,34 @@ def review_messages(review: Review, tz: str) -> list[tuple[str, InlineKeyboardMa
     messages = [("\n".join(header), kb)]
     messages += [(task_card(t, tz), review_kb(t)) for t in review.pending[:MAX_REVIEW_CARDS]]
     return messages
+
+
+def _need_more(have: int, need: int) -> str:
+    left = need - have
+    return f"пока не понял — нужно ещё {left} {plural_ru(left, 'наблюдение', 'наблюдения', 'наблюдений')}"
+
+
+def habits_text(profile: TimeProfile) -> str:
+    """/habits: что бот понял о времени пользователя и как это использует."""
+    lines = [f"⏱ <b>Твои привычки по времени</b> (за последние {WINDOW_DAYS} дней)\n"]
+    for weekend, title in ((False, "Будни"), (True, "Выходные")):
+        hour = profile.preferred_hour(weekend)
+        lines.append(f"• {title}: " + (f"дела обычно делаешь около <b>{hour}:00</b>" if hour is not None
+                                        else _need_more(profile.samples(weekend), MIN_HOUR_SAMPLES)))
+    if bad := profile.bad_hours:
+        hours = ", ".join(f"{h}:00" for h in bad)
+        lines.append(f"• Глухие часы: на напоминания в <b>{hours}</b> почти не реагируешь — туда не ставлю")
+    if (snooze := profile.usual_snooze) is not None:
+        label = "на завтра" if snooze >= 24 * 60 else f"на {SNOOZE_LABELS[snooze].lstrip('+')}"
+        lines.append(f"• Откладываешь обычно <b>{label}</b> — эта кнопка в напоминаниях стоит первой")
+    else:
+        lines.append("• Как откладываешь: " + _need_more(max(profile.snoozes.values(), default=0), MIN_SNOOZE_SAMPLES))
+    lines.append("\nКак использую: если время не названо, ставлю дело на твой обычный час и обхожу часы, "
+                 "когда ты не отвечаешь на напоминания.")
+    lines.append(f"Учусь по твоим действиям: напоминаний {profile.reminders_sent}, отложено "
+                 f"{sum(profile.snoozes.values())}, сделано и назначено тобой — "
+                 f"{profile.samples(False) + profile.samples(True)}.")
+    return "\n".join(lines)
 
 
 def reminder_kb(task: Task, usual_snooze: int | None = None) -> InlineKeyboardMarkup:

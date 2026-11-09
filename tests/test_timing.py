@@ -120,3 +120,23 @@ def test_snooze_buttons_follow_habit():
     assert snooze_options(120) == [(120, "+2 ч"), (15, "+15 мин"), (60, "+1 ч")]
     kb = reminder_kb(SimpleNamespace(id=1), usual_snooze=120)
     assert [b.text for b in kb.inline_keyboard[1]] == ["+2 ч", "+15 мин", "+1 ч"]
+
+
+def test_habits_text():
+    from pim.learning.timing import TimeProfile
+    from pim.telegram.keyboards import habits_text
+
+    empty = habits_text(TimeProfile())
+    assert "Будни: пока не понял — нужно ещё 5 наблюдений" in empty
+    assert "нужно ещё 3 наблюдения" in empty and "напоминаний 0" in empty
+
+    events = [ev(TaskEventKind.DONE, MONDAY + timedelta(days=d, hours=19)) for d in range(5)]
+    events += [ev(TaskEventKind.DONE, SATURDAY + timedelta(hours=12)) for _ in range(4)]
+    events += [ev(TaskEventKind.SNOOZED, MONDAY, minutes=120) for _ in range(3)]
+    for i in range(3):
+        events.append(ev(TaskEventKind.REMINDED, MONDAY + timedelta(days=i, hours=8), task_id=i))
+    text = habits_text(build_profile(events, TZ))
+    assert "Будни: дела обычно делаешь около <b>19:00</b>" in text
+    assert "Выходные: пока не понял — нужно ещё 1 наблюдение" in text
+    assert "<b>8:00</b> почти не реагируешь" in text
+    assert "Откладываешь обычно <b>на 2 ч</b>" in text

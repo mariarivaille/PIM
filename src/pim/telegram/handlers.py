@@ -12,6 +12,7 @@ from pim.config import Settings
 from pim.core.models import utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import format_local, to_local
+from pim.learning.timing import load_profile
 from pim.llm.base import Image
 from pim.reminders.digest import build_digest
 from pim.reminders.dates import CONGRATS_OFFSET, GIFT_OFFSET, UpcomingDate, reminder_at
@@ -27,6 +28,7 @@ from pim.telegram.keyboards import (
     created_kb,
     date_alert_kb,
     format_digest,
+    habits_text,
     list_card,
     lists_menu,
     memory_list,
@@ -72,7 +74,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             "Посмотреть — /memory, удалить — «удали факт 3».\n\n"
             "/tasks — список дел\n/lists — списки (покупки, в поездку…)\n"
             "/digest — сводка на сегодня\n/review — что переносим?\n"
-            "/memory — что я о тебе знаю\n"
+            "/memory — что я о тебе знаю\n/habits — твои привычки по времени\n"
             "/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
             "(«присылай сводку в 8:30» / «не присылай сводку»)\n"
@@ -126,6 +128,11 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         up = UpcomingDate(memory=memory, occurs=occurs, days=(occurs - today).days)
         await cb.message.edit_text(f"{cb.message.html_text}\n{note}", reply_markup=date_alert_kb(up, done))
         await cb.answer()
+
+    @router.message(Command("habits"))
+    async def habits(message: Message):
+        user = await ensure_user(message)
+        await message.answer(habits_text(await load_profile(repo, user)))
 
     @router.message(Command("lists"))
     async def lists(message: Message):

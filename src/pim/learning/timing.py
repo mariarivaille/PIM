@@ -58,6 +58,13 @@ class TimeProfile:
         minutes, count = self.snoozes.most_common(1)[0]
         return minutes if count >= MIN_SNOOZE_SAMPLES else None
 
+    @property
+    def reminders_sent(self) -> int:
+        return sum(sent for sent, _ in self.reminders.values())
+
+    def samples(self, weekend: bool) -> int:
+        return sum((self.weekend_hours if weekend else self.weekday_hours).values())
+
     def prompt_lines(self) -> list[str]:
         lines = []
         weekday, weekend = self.preferred_hour(False), self.preferred_hour(True)
