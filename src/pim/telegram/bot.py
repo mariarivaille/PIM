@@ -1,16 +1,16 @@
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import TelegramObject
+from aiogram.types import BotCommand, TelegramObject
 
-from aid.agent.agent import Agent
-from aid.config import Settings
-from aid.core.models import Task, User
-from aid.core.repository import Repository
-from aid.telegram.handlers import make_router
-from aid.reminders.digest import Digest
-from aid.stt.base import Transcriber
-from aid.telegram.keyboards import format_digest, reminder_kb, task_card
+from pim.agent.agent import Agent
+from pim.config import Settings
+from pim.core.models import Task, User
+from pim.core.repository import Repository
+from pim.telegram.handlers import make_router
+from pim.reminders.digest import Digest
+from pim.stt.base import Transcriber
+from pim.telegram.keyboards import format_digest, reminder_kb, task_card
 
 
 class AllowlistMiddleware(BaseMiddleware):
@@ -35,6 +35,22 @@ class TelegramNotifier:
 
     async def send_digest(self, user: User, digest: Digest) -> None:
         await self._bot.send_message(user.chat_id, format_digest(digest, user.timezone))
+
+
+COMMANDS = [
+    BotCommand(command="start", description="Начать и посмотреть настройки"),
+    BotCommand(command="tasks", description="Список дел"),
+    BotCommand(command="digest", description="План на сегодня"),
+    BotCommand(command="reset", description="Забыть контекст разговора"),
+]
+
+
+async def setup_commands(bot: Bot) -> None:
+    """Меню команд в Telegram — из кода, чтобы не расходилось с обработчиками.
+
+    Имя, about и description бота задаются вручную в @BotFather и здесь не трогаются.
+    """
+    await bot.set_my_commands(COMMANDS)
 
 
 def make_bot(settings: Settings) -> Bot:

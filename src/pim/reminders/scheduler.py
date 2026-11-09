@@ -2,10 +2,10 @@ import asyncio
 import logging
 from typing import Protocol
 
-from aid.core.models import Task, User, utcnow
-from aid.core.repository import Repository
-from aid.core.timeutils import to_local
-from aid.reminders.digest import Digest, build_digest, digest_due
+from pim.core.models import Task, User, utcnow
+from pim.core.repository import Repository
+from pim.core.timeutils import to_local
+from pim.reminders.digest import Digest, build_digest, digest_due
 
 log = logging.getLogger(__name__)
 

@@ -2,9 +2,9 @@ from datetime import time, timedelta
 
 import pytest
 
-from aid.agent.tools import ToolContext, run_tool
-from aid.core.models import utcnow
-from aid.core.timeutils import parse_local, resolve_day_time, to_local
+from pim.agent.tools import ToolContext, run_tool
+from pim.core.models import utcnow
+from pim.core.timeutils import parse_local, resolve_day_time, to_local
 
 from tests.conftest import TZ
 

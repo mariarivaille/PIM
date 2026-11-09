@@ -3,8 +3,8 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from aid.core.models import Task, TaskStatus, User, utcnow
-from aid.core.timeutils import next_occurrence
+from pim.core.models import Task, TaskStatus, User, utcnow
+from pim.core.timeutils import next_occurrence
 
 
 class Repository:

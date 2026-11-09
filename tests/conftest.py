@@ -1,7 +1,7 @@
 import pytest
 
-from aid.core.db import init_db, make_engine, make_sessionmaker
-from aid.core.repository import Repository
+from pim.core.db import init_db, make_engine, make_sessionmaker
+from pim.core.repository import Repository
 
 TZ = "Europe/Moscow"
 

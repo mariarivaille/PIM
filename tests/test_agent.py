@@ -1,9 +1,9 @@
-from aid.agent.agent import Agent, History
-from aid.agent.tools import ToolContext, run_tool
-from aid.core.models import TaskStatus
-from aid.llm.base import Message, ToolCall
-from aid.llm.gigachat import GigaChatProvider
-from aid.reminders.scheduler import ReminderScheduler
+from pim.agent.agent import Agent, History
+from pim.agent.tools import ToolContext, run_tool
+from pim.core.models import TaskStatus
+from pim.llm.base import Message, ToolCall
+from pim.llm.gigachat import GigaChatProvider
+from pim.reminders.scheduler import ReminderScheduler
 
 from tests.conftest import TZ
 
@@ -65,7 +65,7 @@ async def test_tool_errors_are_returned_to_model(repo, user):
 
 async def test_scheduler_sends_once(repo, user):
     from datetime import timedelta
-    from aid.core.models import utcnow
+    from pim.core.models import utcnow
 
     sent = []
 

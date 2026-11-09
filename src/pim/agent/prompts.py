@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta
 
-from aid.core.timeutils import WEEKDAYS_RU
+from pim.core.timeutils import WEEKDAYS_RU
 
 SYSTEM_PROMPT = """\
-Ты — личный ассистент, который ведёт список дел пользователя и напоминает о них.
+Ты — Pim, личный ассистент, который ведёт список дел пользователя и напоминает о них.
 
 Сейчас: {now} ({weekday}), часовой пояс пользователя: {tz}.
 Утренняя сводка дел: {digest}.

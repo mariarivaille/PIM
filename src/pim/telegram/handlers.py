@@ -7,14 +7,14 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.chat_action import ChatActionSender
 
-from aid.agent.agent import Agent
-from aid.config import Settings
-from aid.core.models import utcnow
-from aid.core.repository import Repository
-from aid.core.timeutils import format_local
-from aid.reminders.digest import build_digest
-from aid.stt.base import Transcriber
-from aid.telegram.keyboards import TaskAction, created_kb, format_digest, task_card
+from pim.agent.agent import Agent
+from pim.config import Settings
+from pim.core.models import utcnow
+from pim.core.repository import Repository
+from pim.core.timeutils import format_local
+from pim.reminders.digest import build_digest
+from pim.stt.base import Transcriber
+from pim.telegram.keyboards import TaskAction, created_kb, format_digest, task_card
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         user = await ensure_user(message)
         digest = f"в {user.digest_time}" if user.digest_time else "выключена"
         await message.answer(
-            "Привет! Пиши или наговаривай мне дела — я запишу и напомню.\n"
+            "Привет! Я Pim. Пиши или наговаривай мне дела — я запишу и напомню.\n"
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
             "/tasks — список дел\n/digest — сводка на сегодня\n/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "

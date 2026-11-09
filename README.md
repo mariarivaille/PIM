@@ -1,6 +1,6 @@
-# AIDAssistant
+# Pim
 
-Личный LLM-ассистент: Telegram-бот, которому пишешь дела обычным текстом — он их записывает и напоминает.
+Pim — личный LLM-ассистент: Telegram-бот, которому пишешь или наговариваешь дела — он их записывает и напоминает.
 Дальше — выполнение части дел и отдельное приложение.
 
 ## Архитектура
@@ -30,7 +30,7 @@ reminders/ ReminderScheduler: поллинг БД → Notifier (сейчас Tel
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 cp .env.example .env   # заполнить токены
-.venv/bin/aid
+.venv/bin/pim
 ```
 
 Тесты: `.venv/bin/pytest`
@@ -46,7 +46,7 @@ cp .env.example .env   # заполнить токены
 docker compose up -d --build
 ```
 
-БД лежит в `./data/aid.db` на хосте.
+БД лежит в `./data/pim.db` на хосте.
 
 ## Как добавить новое умение
 

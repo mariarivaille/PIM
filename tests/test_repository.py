@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from aid.core.models import TaskStatus, utcnow
-from aid.core.timeutils import parse_local, to_local
+from pim.core.models import TaskStatus, utcnow
+from pim.core.timeutils import parse_local, to_local
 
 from tests.conftest import TZ
 

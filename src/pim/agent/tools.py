@@ -12,11 +12,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
 
-from aid.core.models import Task, User, utcnow
-from aid.core.repository import Repository
-from aid.core.timeutils import DAY_KEYWORDS, format_local, parse_local, resolve_day_time, to_local
-from aid.llm.base import ToolSpec
-from aid.reminders.digest import parse_hhmm
+from pim.core.models import Task, User, utcnow
+from pim.core.repository import Repository
+from pim.core.timeutils import DAY_KEYWORDS, format_local, parse_local, resolve_day_time, to_local
+from pim.llm.base import ToolSpec
+from pim.reminders.digest import parse_hhmm
 
 log = logging.getLogger(__name__)
 

@@ -1,12 +1,12 @@
-from aid.config import Settings
-from aid.stt.base import Transcriber
+from pim.config import Settings
+from pim.stt.base import Transcriber
 
 
 def make_transcriber(settings: Settings) -> Transcriber | None:
     if settings.stt_provider == "none":
         return None
     if settings.stt_provider == "whisper":
-        from aid.stt.whisper import WhisperTranscriber
+        from pim.stt.whisper import WhisperTranscriber
 
         return WhisperTranscriber(
             model_size=settings.whisper_model,

@@ -3,7 +3,7 @@ import uuid
 from gigachat import GigaChat
 from gigachat.models import Chat, Function, FunctionCall, Messages, MessagesRole
 
-from aid.llm.base import Message, ToolCall, ToolSpec
+from pim.llm.base import Message, ToolCall, ToolSpec
 
 _ROLES = {
     "system": MessagesRole.SYSTEM,

@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from aid.core.models import Task, User
-from aid.core.repository import Repository
-from aid.core.timeutils import to_local
+from pim.core.models import Task, User
+from pim.core.repository import Repository
+from pim.core.timeutils import to_local
 
 # Если бот был выключен в момент сводки, догоняем её не позже чем через это окно
 CATCH_UP_WINDOW = timedelta(hours=3)

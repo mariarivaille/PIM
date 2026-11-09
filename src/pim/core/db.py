@@ -4,7 +4,7 @@ from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateColumn
 
-from aid.core.models import Base
+from pim.core.models import Base
 
 log = logging.getLogger(__name__)
 

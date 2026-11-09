@@ -3,7 +3,7 @@ import logging
 
 from openai import AsyncOpenAI
 
-from aid.llm.base import Message, ToolCall, ToolSpec
+from pim.llm.base import Message, ToolCall, ToolSpec
 
 log = logging.getLogger(__name__)
 

@@ -5,12 +5,12 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Callable
 
-from aid.agent.prompts import build_system_prompt
-from aid.agent.tools import TOOLS, ToolContext, run_tool, task_view
-from aid.core.models import Task, User, utcnow
-from aid.core.repository import Repository
-from aid.core.timeutils import to_local
-from aid.llm.base import LLMProvider, Message
+from pim.agent.prompts import build_system_prompt
+from pim.agent.tools import TOOLS, ToolContext, run_tool, task_view
+from pim.core.models import Task, User, utcnow
+from pim.core.repository import Repository
+from pim.core.timeutils import to_local
+from pim.llm.base import LLMProvider, Message
 
 log = logging.getLogger(__name__)
 

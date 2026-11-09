@@ -2,13 +2,13 @@ from datetime import timedelta
 
 from sqlalchemy import text
 
-from aid.agent.tools import ToolContext, run_tool
-from aid.core.db import init_db, make_engine, make_sessionmaker
-from aid.core.repository import Repository
-from aid.core.timeutils import parse_local
-from aid.reminders.digest import build_digest, digest_due
-from aid.reminders.scheduler import ReminderScheduler
-from aid.telegram.keyboards import format_digest
+from pim.agent.tools import ToolContext, run_tool
+from pim.core.db import init_db, make_engine, make_sessionmaker
+from pim.core.repository import Repository
+from pim.core.timeutils import parse_local
+from pim.reminders.digest import build_digest, digest_due
+from pim.reminders.scheduler import ReminderScheduler
+from pim.telegram.keyboards import format_digest
 
 from tests.conftest import TZ
 
@@ -66,7 +66,7 @@ async def test_scheduler_sends_digest_once_per_day(repo, user, monkeypatch):
         async def send_digest(self, u, d):
             sent.append(u.id)
 
-    monkeypatch.setattr("aid.reminders.scheduler.utcnow", lambda: NOW)
+    monkeypatch.setattr("pim.reminders.scheduler.utcnow", lambda: NOW)
     sched = ReminderScheduler(repo, FakeNotifier(), 30)
     assert await sched.tick_digests() == 1
     assert await sched.tick_digests() == 0

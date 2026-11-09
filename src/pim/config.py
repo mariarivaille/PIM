@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     whisper_cpu_threads: int = 4
     max_voice_seconds: int = 300
 
-    database_url: str = "sqlite+aiosqlite:///./aid.db"
+    database_url: str = "sqlite+aiosqlite:///./pim.db"
     default_timezone: str = "Europe/Moscow"
     reminder_poll_seconds: int = 30
     history_size: int = 10

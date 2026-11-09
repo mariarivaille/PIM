@@ -1,10 +1,10 @@
-from aid.config import Settings
-from aid.llm.base import LLMProvider
+from pim.config import Settings
+from pim.llm.base import LLMProvider
 
 
 def make_provider(settings: Settings) -> LLMProvider:
     if settings.llm_provider == "openrouter":
-        from aid.llm.openai_compat import OpenAICompatProvider
+        from pim.llm.openai_compat import OpenAICompatProvider
 
         return OpenAICompatProvider(
             api_key=settings.openrouter_api_key,
@@ -12,7 +12,7 @@ def make_provider(settings: Settings) -> LLMProvider:
             base_url=settings.openrouter_base_url,
         )
     if settings.llm_provider == "gigachat":
-        from aid.llm.gigachat import GigaChatProvider
+        from pim.llm.gigachat import GigaChatProvider
 
         return GigaChatProvider(
             credentials=settings.gigachat_credentials,

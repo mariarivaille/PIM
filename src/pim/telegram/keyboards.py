@@ -4,9 +4,9 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from aid.core.models import Task
-from aid.core.timeutils import WEEKDAYS_RU, format_local, to_local
-from aid.reminders.digest import Digest
+from pim.core.models import Task
+from pim.core.timeutils import WEEKDAYS_RU, format_local, to_local
+from pim.reminders.digest import Digest
 
 # Лимит Telegram 4096 символов, оставляем запас на разметку
 MAX_MESSAGE_CHARS = 3800

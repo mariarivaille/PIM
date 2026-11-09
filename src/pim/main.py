@@ -1,14 +1,14 @@
 import asyncio
 import logging
 
-from aid.agent.agent import Agent, History
-from aid.config import get_settings
-from aid.core.db import init_db, make_engine, make_sessionmaker
-from aid.core.repository import Repository
-from aid.llm.factory import make_provider
-from aid.reminders.scheduler import ReminderScheduler
-from aid.stt.factory import make_transcriber
-from aid.telegram.bot import TelegramNotifier, make_bot, make_dispatcher
+from pim.agent.agent import Agent, History
+from pim.config import get_settings
+from pim.core.db import init_db, make_engine, make_sessionmaker
+from pim.core.repository import Repository
+from pim.llm.factory import make_provider
+from pim.reminders.scheduler import ReminderScheduler
+from pim.stt.factory import make_transcriber
+from pim.telegram.bot import TelegramNotifier, make_bot, make_dispatcher, setup_commands
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ async def main() -> None:
     transcriber = make_transcriber(settings)
     bot = make_bot(settings)
     dp = make_dispatcher(agent, repo, settings, transcriber)
+    dp.startup.register(setup_commands)
     scheduler = ReminderScheduler(repo, TelegramNotifier(bot), settings.reminder_poll_seconds)
 
     background = [asyncio.create_task(scheduler.run_forever())]
