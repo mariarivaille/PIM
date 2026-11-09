@@ -46,6 +46,8 @@ class ToolContext:
     auto_time: set[int] = field(default_factory=set)
     # уже просили модель выбрать время за этот ход — второй раз не просим, ставим запасное
     asked_for_time: bool = False
+    # от какого момента считать «завтра», «через час»; None = сейчас (для пересланных — дата отправки)
+    reference_time: datetime | None = None
     # текст сообщения пользователя и предыдущий ответ бота: по ним проверяем, просил ли он что-то запомнить
     user_text: str = ""
     prev_assistant: str = ""
@@ -62,7 +64,13 @@ MEMORY_OFFER = "Запомнить это?"
 AFFIRMATIVE = re.compile(r"^\s*(да|ага|угу|давай|конечно|ок|окей|можно|ну да|yes)\b", re.IGNORECASE)
 
 
+# Пометка, с которой пересланное сообщение попадает к модели и в историю (её же понимает рефлексия)
+FORWARD_MARK = "[Пересланное сообщение"
+
+
 def memory_requested(ctx: "ToolContext") -> bool:
+    if ctx.user_text.startswith(FORWARD_MARK):
+        return False  # «запомни» в чужом пересланном сообщении — не просьба пользователя
     if EXPLICIT_MEMORY_REQUEST.search(ctx.user_text):
         return True
     return MEMORY_OFFER.lower() in ctx.prev_assistant.lower() and bool(AFFIRMATIVE.match(ctx.user_text))
@@ -101,10 +109,13 @@ def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: st
     """Время напоминания из того, что дала модель. Даты считает код, а не LLM.
 
     Возвращает (время, выбрано ли оно без пользователя) — во втором случае бот должен об этом сказать.
+    Относительные «завтра», «в пятницу», «через час» считаются от ctx.reference_time — для пересланного
+    сообщения это момент его отправки, а не «сейчас».
     """
     now = utcnow()
+    base = ctx.reference_time or now
     if in_minutes:
-        return now + timedelta(minutes=int(in_minutes)), False
+        return base + timedelta(minutes=int(in_minutes)), False
     if due_at:
         due, defaulted = _parse_due(ctx, due_at)
         auto = defaulted or bool(time_guessed)
@@ -115,7 +126,7 @@ def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: st
             at = parse_hhmm(time) if time else None
         except ValueError as e:
             raise ToolError(f"time нужно в формате HH:MM, получено {time!r}") from e
-        due = resolve_day_time(now, ctx.user.timezone, day, at)
+        due = resolve_day_time(base, ctx.user.timezone, day, at)
         auto = at is None or bool(time_guessed)
     else:
         return None, False
@@ -132,6 +143,9 @@ def _due_view(ctx: ToolContext, task: Task, auto: bool) -> dict[str, Any]:
     if auto:
         view["time_chosen_by_assistant"] = True
         ctx.auto_time.add(task.id)
+    if task.due_at and task.due_at <= utcnow():
+        # бывает у пересланных сообщений: срок из них уже прошёл — модель должна предупредить пользователя
+        view["already_passed"] = True
     return view
 
 
@@ -173,6 +187,10 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
     task = await ctx.repo.create_task(ctx.user.id, title=title, due_at=due, rrule=rrule, notes=notes)
+    if due and due <= utcnow():
+        # срок уже прошёл (обычно из пересланного сообщения): дело видно в сводке как просроченное,
+        # но отдельно не звенит — бот и так сказал об этом в ответе
+        await ctx.repo.mark_reminded(task.id, utcnow())
     ctx.touched.append(task)
     return {"created": _due_view(ctx, task, auto)}
 
@@ -290,6 +308,11 @@ async def remember(ctx: ToolContext, content: str, kind: str | None = None, unti
     if not content:
         raise ToolError("пустой content")
     if not memory_requested(ctx):
+        if ctx.user_text.startswith(FORWARD_MARK):
+            raise ToolError(
+                "это чужое пересланное сообщение — в память пользователя его не сохраняй и НЕ говори, что запомнил. "
+                f"Если там полезные данные (телефон, адрес), перескажи их и в конце спроси ровно: «{MEMORY_OFFER}»"
+            )
         if ctx.user.auto_memory:
             raise ToolError(
                 "пользователь не просил запомнить — посреди разговора ничего не сохраняй и не переспрашивай: "

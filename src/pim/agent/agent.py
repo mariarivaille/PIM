@@ -8,15 +8,16 @@ from typing import Callable
 
 from pim.agent.commands import parse_delete_facts
 from pim.agent.prompts import build_system_prompt
-from pim.agent.tools import TOOLS, ToolContext, memory_view, run_tool, task_view
+from pim.agent.tools import FORWARD_MARK, TOOLS, ToolContext, memory_view, run_tool, task_view
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
-from pim.core.timeutils import to_local
+from pim.core.timeutils import WEEKDAYS_RU, to_local
 from pim.llm.base import LLMProvider, Message
 
 log = logging.getLogger(__name__)
 
 MAX_STEPS = 6
+MAX_FORWARD_CHARS = 4000
 
 
 @dataclass
@@ -72,6 +73,17 @@ class Agent:
                 return reply
             return await self._handle(user, text)
 
+    async def handle_forwarded(self, user: User, text: str, sender: str, sent_at: datetime) -> AgentReply:
+        """Пересланное сообщение: чужие слова, из которых надо достать дела пользователя.
+
+        Относительные даты в нём («завтра», «в пятницу») считаются от момента отправки, а не от «сейчас».
+        """
+        local = to_local(sent_at, user.timezone)
+        header = f"{FORWARD_MARK} от {sender}, отправлено {WEEKDAYS_RU[local.weekday()]} {local:%d.%m.%Y %H:%M}]"
+        wrapped = f"{header}\n{text[:MAX_FORWARD_CHARS]}"
+        async with self._locks[user.id]:
+            return await self._handle(user, wrapped, reference_time=sent_at)
+
     async def _delete_facts(self, user: User, numbers: list[int]) -> AgentReply:
         lines = []
         for n in numbers:
@@ -89,11 +101,11 @@ class Agent:
             auto_memory=user.auto_memory,
         ))
 
-    async def _handle(self, user: User, text: str) -> AgentReply:
+    async def _handle(self, user: User, text: str, reference_time: datetime | None = None) -> AgentReply:
         history = await self.history.get(user.id)
         prev_assistant = next((m.content for m in reversed(history) if m.role == "assistant"), "")
         ctx = ToolContext(repo=self._repo, user=user, user_text=text, prev_assistant=prev_assistant,
-                          max_memories=self._max_memories)
+                          max_memories=self._max_memories, reference_time=reference_time)
         user_msg = Message("user", text)
         messages = [await self._system_message(user), *history, user_msg]
 

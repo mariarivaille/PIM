@@ -25,6 +25,19 @@ from pim.telegram.keyboards import (
 log = logging.getLogger(__name__)
 
 
+def forward_sender(origin, message: Message) -> str:
+    """Кто автор пересланного сообщения — для контекста модели («Созвон с Андреем»)."""
+    user = getattr(origin, "sender_user", None)
+    if user is not None:
+        return "тебя самого" if message.from_user and user.id == message.from_user.id else user.full_name
+    chat = getattr(origin, "sender_chat", None) or getattr(origin, "chat", None)
+    name = getattr(origin, "sender_user_name", None) or (chat.title if chat else None)
+    signature = getattr(origin, "author_signature", None)
+    if name and signature:
+        return f"{signature} ({name})"
+    return name or "неизвестного отправителя"
+
+
 def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber: Transcriber | None) -> Router:
     router = Router()
 
@@ -79,11 +92,12 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         user = await ensure_user(message)
         await message.answer(memory_list(await repo.list_memories(user.id), user.timezone, user.auto_memory))
 
-    @router.message(F.text)
+    @router.message(F.text | F.caption)
     async def on_text(message: Message):
+        # подпись к фото/файлу обрабатываем как текст — так работают и пересланные посты с картинкой
         user = await ensure_user(message)
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            await process(message, user, message.text)
+            await process(message, user, message.text or message.caption)
 
     @router.message(F.voice | F.audio | F.video_note)
     async def on_voice(message: Message):
@@ -109,9 +123,17 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             await message.answer(f"🎙 <i>{html.escape(text)}</i>")
             await process(message, user, text)
 
+    @router.message(F.forward_origin)
+    async def on_forwarded_without_text(message: Message):
+        await message.answer("В пересланном сообщении я понимаю текст, подписи и голосовые — здесь их нет. "
+                             "Напиши, что с ним сделать.")
+
     async def process(message: Message, user, text: str):
         try:
-            reply = await agent.handle(user, text)
+            if origin := message.forward_origin:
+                reply = await agent.handle_forwarded(user, text, forward_sender(origin, message), origin.date)
+            else:
+                reply = await agent.handle(user, text)
         except Exception:
             log.exception("agent failed")
             await message.answer("Что-то пошло не так с моделью, попробуй ещё раз.")
