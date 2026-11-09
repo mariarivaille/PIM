@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, TypeDecorator
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, TypeDecorator, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -49,6 +49,8 @@ class User(Base):
     # Локальное время вечернего разбора «что переносим?» "HH:MM"; None = выключен
     review_time: Mapped[str | None] = mapped_column(String(5), default="21:00", server_default="21:00")
     last_review_on: Mapped[str | None] = mapped_column(String(10))
+    # Когда последний раз проверяли важные даты (локальная дата) — раз в день
+    last_dates_on: Mapped[str | None] = mapped_column(String(10))
     # Реплики раньше этого момента не попадают в контекст диалога (/reset)
     context_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Последний выданный номер факта в памяти (у каждого пользователя своя нумерация)
@@ -86,6 +88,10 @@ class Memory(Base):
     source: Mapped[MemorySource] = mapped_column(String(16), default=MemorySource.EXPLICIT)
     # Для временных фактов («на этой неделе в отпуске»); None = бессрочно
     expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Ежегодная дата из текста факта (ДР, годовщина…) — для заблаговременных напоминаний; см. core/yearly.py
+    date_month: Mapped[int | None] = mapped_column()
+    date_day: Mapped[int | None] = mapped_column()
+    date_year: Mapped[int | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -142,3 +148,16 @@ class ListItem(Base):
     done: Mapped[bool] = mapped_column(default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     done_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class DateAlert(Base):
+    """Отправленное предупреждение о дате: чтобы «через 7 дней ДР мамы» пришло ровно один раз."""
+
+    __tablename__ = "date_alerts"
+    __table_args__ = (UniqueConstraint("memory_id", "occurrence", "lead_days"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    memory_id: Mapped[int] = mapped_column(ForeignKey("memories.id", ondelete="CASCADE"), index=True)
+    occurrence: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD наступления
+    lead_days: Mapped[int] = mapped_column()
+    sent_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

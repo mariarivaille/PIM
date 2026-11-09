@@ -28,6 +28,8 @@ async def main() -> None:
     engine = make_engine(settings.database_url)
     await init_db(engine)
     repo = Repository(make_sessionmaker(engine))
+    if found := await repo.backfill_memory_dates():
+        log.info("found yearly dates in %d existing memories", found)
 
     history = History(repo, settings.history_size, ttl_seconds=settings.history_ttl_minutes * 60)
     llm = make_provider(settings)

@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from pim.core.models import Task, TaskStatus, User
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
-from pim.reminders.digest import daily_due
+from pim.reminders.daily import daily_due
 
 
 @dataclass

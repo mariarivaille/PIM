@@ -1,16 +1,15 @@
 """Утренняя сводка: собирается из БД детерминированно, без LLM."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
 from pim.core.models import Task, User
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
+from pim.reminders.daily import daily_due
+from pim.reminders.dates import UpcomingDate, user_upcoming_dates
 
-# Если бот был выключен в момент сводки, догоняем её не позже чем через это окно
-CATCH_UP_WINDOW = timedelta(hours=3)
-
+DATES_HORIZON = 14
 
 @dataclass
 class Digest:
@@ -19,15 +18,12 @@ class Digest:
     today: list[Task] = field(default_factory=list)
     upcoming: list[Task] = field(default_factory=list)
     undated: list[Task] = field(default_factory=list)
+    # важные даты из памяти (ДР, годовщины) на ближайшие DATES_HORIZON дней
+    dates: list[UpcomingDate] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not (self.overdue or self.today or self.upcoming or self.undated)
-
-
-def parse_hhmm(value: str) -> time:
-    h, m = value.strip().split(":")
-    return time(int(h), int(m))
+        return not (self.overdue or self.today or self.upcoming or self.undated or self.dates)
 
 
 async def build_digest(repo: Repository, user: User, now: datetime) -> Digest:
@@ -44,18 +40,8 @@ async def build_digest(repo: Repository, user: User, now: datetime) -> Digest:
             digest.today.append(task)
         else:
             digest.upcoming.append(task)
+    digest.dates = await user_upcoming_dates(repo, user, now, DATES_HORIZON)
     return digest
-
-
-def daily_due(at: str | None, last_on: str | None, tz: str, now: datetime) -> bool:
-    """Пора ли ежедневная рассылка: наступило время `at`, сегодня ещё не слали, не опоздали больше чем на окно."""
-    if not at:
-        return False
-    local_now = to_local(now, tz)
-    if last_on == local_now.date().isoformat():
-        return False
-    scheduled = datetime.combine(local_now.date(), parse_hhmm(at), tzinfo=ZoneInfo(tz))
-    return scheduled <= local_now < scheduled + CATCH_UP_WINDOW
 
 
 def digest_due(user: User, now: datetime) -> bool:

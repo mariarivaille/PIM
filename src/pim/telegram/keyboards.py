@@ -7,6 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from pim.core.models import ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
 from pim.lists.matching import normalize
+from pim.reminders.dates import UpcomingDate, days_until_text
 from pim.reminders.digest import Digest
 from pim.reminders.review import Review
 
@@ -22,6 +23,61 @@ class TaskAction(CallbackData, prefix="t"):
 
 class ReviewAction(CallbackData, prefix="r"):
     action: str  # all_tomorrow
+
+
+class DateAction(CallbackData, prefix="d"):
+    action: str  # gift | congrats | skip
+    memory_id: int
+    occurs: int  # YYYYMMDD наступления даты
+    done: int = 0  # битовая маска уже нажатых кнопок: так клавиатура без состояния в БД
+
+
+DATE_GIFT, DATE_CONGRATS = 1, 2
+_BIRTHDAY = ("др", "д.р", "день рожд", "дня рожд", "днюх", "родил")
+
+
+def _date_icon(content: str) -> str:
+    text = content.casefold()
+    if any(k in text for k in ("свадьб", "годовщин")):
+        return "💍"
+    return "🎂" if any(k in text for k in _BIRTHDAY) else "🎉"
+
+
+def _age_text(up: UpcomingDate) -> str:
+    if up.age is None:
+        return ""
+    if any(k in up.memory.content.casefold() for k in _BIRTHDAY):
+        return f" — исполнится {up.age}"
+    return f" — {up.age} {plural_ru(up.age, 'год', 'года', 'лет')}"
+
+
+def date_alert_kb(up: UpcomingDate, done: int = 0) -> InlineKeyboardMarkup | None:
+    if up.days == 0:
+        return None
+    occurs = int(up.occurs.strftime("%Y%m%d"))
+    kb = InlineKeyboardBuilder()
+    if not done & DATE_GIFT:
+        kb.button(text="🎁 Напомнить купить подарок",
+                  callback_data=DateAction(action="gift", memory_id=up.memory.id, occurs=occurs, done=done))
+    if not done & DATE_CONGRATS:
+        kb.button(text="📞 Напомнить поздравить",
+                  callback_data=DateAction(action="congrats", memory_id=up.memory.id, occurs=occurs, done=done))
+    if done == DATE_GIFT | DATE_CONGRATS:
+        return None
+    kb.button(text="👌 Не нужно", callback_data=DateAction(action="skip", memory_id=up.memory.id, occurs=occurs))
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def date_alert_text(up: UpcomingDate) -> str:
+    when = f"{WEEKDAYS_RU[up.occurs.weekday()]} {up.occurs:%d.%m}"
+    what = f"{html.escape(up.memory.content)}{_age_text(up)}"
+    icon = _date_icon(up.memory.content)
+    if up.days == 0:
+        return f"{icon} <b>Сегодня</b> — {what}\nНе забудь поздравить!"
+    if up.days == 1:
+        return f"{icon} <b>Завтра, {when}</b> — {what}"
+    return f"{icon} <b>{days_until_text(up.days).capitalize()}, {when}</b> — {what}\nПодготовиться заранее?"
 
 
 class ListAction(CallbackData, prefix="l"):
@@ -157,6 +213,10 @@ def format_digest(digest: Digest, tz: str) -> str:
         parts += [_digest_line(t, tz, with_date=False) for t in digest.today]
     else:
         parts.append("\nНа сегодня ничего не запланировано.")
+    if digest.dates:
+        parts.append("\n<b>🎂 Скоро:</b>")
+        parts += [f"• {WEEKDAYS_RU[u.occurs.weekday()]} {u.occurs:%d.%m} — {html.escape(u.memory.content)}"
+                  f" ({days_until_text(u.days)})" for u in digest.dates]
     if digest.upcoming:
         parts.append("\n<b>Дальше:</b>")
         parts += [_digest_line(t, tz, with_date=True) for t in digest.upcoming]

@@ -8,6 +8,7 @@ from pim.core.repository import Repository
 from pim.core.timeutils import to_local
 from pim.memory.reflection import Reflector
 from pim.reminders.digest import Digest, build_digest, digest_due
+from pim.reminders.dates import UpcomingDate, alerts_for_today, dates_due, occurrence_key, user_upcoming_dates
 from pim.reminders.review import Review, build_review, review_due
 
 log = logging.getLogger(__name__)
@@ -23,6 +24,8 @@ class Notifier(Protocol):
     async def send_digest(self, user: User, digest: Digest) -> None: ...
 
     async def send_review(self, user: User, review: Review) -> None: ...
+
+    async def send_date_alert(self, user: User, upcoming: UpcomingDate) -> None: ...
 
 
 class ReminderScheduler:
@@ -86,6 +89,27 @@ class ReminderScheduler:
             await self._repo.mark_review_sent(user.id, to_local(now, user.timezone).date().isoformat())
         return sent
 
+    async def tick_dates(self) -> int:
+        """Раз в день: дни рождения и годовщины из памяти — за неделю, накануне и в сам день."""
+        now = utcnow()
+        sent = 0
+        for user in await self._repo.users_for_dates():
+            if not dates_due(user, now):
+                continue
+            for up in alerts_for_today(await user_upcoming_dates(self._repo, user, now, horizon_days=7)):
+                key = occurrence_key(up.occurs)
+                if await self._repo.date_alert_sent(up.memory.id, key, up.days):
+                    continue
+                try:
+                    await self._notifier.send_date_alert(user, up)
+                except Exception:
+                    log.exception("failed to send date alert to user %s", user.id)
+                    continue
+                await self._repo.record_date_alert(up.memory.id, key, up.days)
+                sent += 1
+            await self._repo.mark_dates_checked(user.id, to_local(now, user.timezone).date().isoformat())
+        return sent
+
     async def tick_reflection(self) -> int:
         """Разбирает затихшие разговоры и молча обновляет память (пользователь видит её только в /memory)."""
         if self._reflector is None:
@@ -109,7 +133,7 @@ class ReminderScheduler:
     async def run_forever(self) -> None:
         log.info("reminder scheduler started, poll every %ss", self._poll)
         while True:
-            for job in (self.tick, self.tick_digests, self.tick_reviews, self.tick_reflection):
+            for job in (self.tick, self.tick_digests, self.tick_dates, self.tick_reviews, self.tick_reflection):
                 try:
                     await job()
                 except Exception:

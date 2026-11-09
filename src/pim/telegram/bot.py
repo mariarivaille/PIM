@@ -8,10 +8,11 @@ from pim.config import Settings
 from pim.core.models import Task, User
 from pim.core.repository import Repository
 from pim.reminders.digest import Digest
+from pim.reminders.dates import UpcomingDate
 from pim.reminders.review import Review
 from pim.stt.base import Transcriber
 from pim.telegram.handlers import make_router
-from pim.telegram.keyboards import format_digest, reminder_kb, review_messages, task_card
+from pim.telegram.keyboards import date_alert_kb, date_alert_text, format_digest, reminder_kb, review_messages, task_card
 
 
 class AllowlistMiddleware(BaseMiddleware):
@@ -36,6 +37,9 @@ class TelegramNotifier:
 
     async def send_digest(self, user: User, digest: Digest) -> None:
         await self._bot.send_message(user.chat_id, format_digest(digest, user.timezone))
+
+    async def send_date_alert(self, user: User, upcoming: UpcomingDate) -> None:
+        await self._bot.send_message(user.chat_id, date_alert_text(upcoming), reply_markup=date_alert_kb(upcoming))
 
     async def send_review(self, user: User, review: Review) -> None:
         for text, kb in review_messages(review, user.timezone):

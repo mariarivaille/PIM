@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pim.core.models import (
     ChatMessage,
+    DateAlert,
     ItemList,
     ListItem,
     Memory,
@@ -16,6 +17,16 @@ from pim.core.models import (
     utcnow,
 )
 from pim.core.timeutils import next_occurrence
+from pim.core.yearly import parse_yearly_date
+
+
+def _apply_yearly_date(memory: Memory) -> bool:
+    """Ежегодная дата из текста факта — в поля date_*; True, если нашлась."""
+    found = parse_yearly_date(memory.content)
+    memory.date_month = found.month if found else None
+    memory.date_day = found.day if found else None
+    memory.date_year = found.year if found else None
+    return found is not None
 
 
 class Repository:
@@ -107,6 +118,7 @@ class Repository:
             user.memory_seq = number
             memory = Memory(user_id=user_id, number=number, content=content, kind=kind, source=source,
                             expires_at=expires_at)
+            _apply_yearly_date(memory)
             s.add(memory)
         return memory
 
@@ -135,13 +147,59 @@ class Repository:
                 return None
             for k, v in fields.items():
                 setattr(memory, k, v)
+            if "content" in fields:
+                _apply_yearly_date(memory)
             return memory
+
+    async def memory_by_id(self, user_id: int, memory_id: int) -> Memory | None:
+        async with self._sm() as s:
+            memory = await s.get(Memory, memory_id)
+            return memory if memory and memory.user_id == user_id else None
+
+    async def backfill_memory_dates(self) -> int:
+        """Проставить ежегодные даты фактам, сохранённым до появления этой функции."""
+        async with self._sm() as s, s.begin():
+            found = 0
+            for memory in await s.scalars(select(Memory).where(Memory.date_month.is_(None))):
+                if _apply_yearly_date(memory):
+                    found += 1
+            return found
+
+    async def memories_with_dates(self, user_id: int) -> list[Memory]:
+        async with self._sm() as s:
+            return list(await s.scalars(
+                select(Memory).where(Memory.user_id == user_id, Memory.date_month.is_not(None))
+            ))
+
+    async def users_for_dates(self) -> list[User]:
+        """Пользователи, у которых в памяти есть ежегодные даты."""
+        async with self._sm() as s:
+            return list(await s.scalars(
+                select(User).where(User.id.in_(select(Memory.user_id).where(Memory.date_month.is_not(None))))
+            ))
+
+    async def date_alert_sent(self, memory_id: int, occurrence: str, lead_days: int) -> bool:
+        async with self._sm() as s:
+            return await s.scalar(select(func.count()).select_from(DateAlert).where(
+                DateAlert.memory_id == memory_id, DateAlert.occurrence == occurrence,
+                DateAlert.lead_days == lead_days)) > 0
+
+    async def record_date_alert(self, memory_id: int, occurrence: str, lead_days: int) -> None:
+        async with self._sm() as s, s.begin():
+            s.add(DateAlert(memory_id=memory_id, occurrence=occurrence, lead_days=lead_days))
+
+    async def mark_dates_checked(self, user_id: int, local_date: str) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.last_dates_on = local_date
 
     async def delete_memory(self, user_id: int, number: int) -> Memory | None:
         async with self._sm() as s, s.begin():
             memory = await self._memory_by_number(s, user_id, number)
             if not memory:
                 return None
+            await s.execute(delete(DateAlert).where(DateAlert.memory_id == memory.id))
             await s.delete(memory)
             return memory
 

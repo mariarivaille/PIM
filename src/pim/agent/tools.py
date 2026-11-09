@@ -27,7 +27,7 @@ from pim.core.timeutils import (
 )
 from pim.lists.matching import display_name, match_items, match_list, normalize
 from pim.llm.base import ToolSpec
-from pim.reminders.digest import parse_hhmm
+from pim.reminders.daily import parse_hhmm
 
 log = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 import html
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -11,16 +11,21 @@ from pim.agent.agent import Agent
 from pim.config import Settings
 from pim.core.models import utcnow
 from pim.core.repository import Repository
-from pim.core.timeutils import format_local
+from pim.core.timeutils import format_local, to_local
 from pim.llm.base import Image
 from pim.reminders.digest import build_digest
+from pim.reminders.dates import CONGRATS_OFFSET, GIFT_OFFSET, UpcomingDate, reminder_at
 from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpone_to_tomorrow
 from pim.stt.base import Transcriber
 from pim.telegram.keyboards import (
+    DateAction,
     ListAction,
     ReviewAction,
     TaskAction,
+    DATE_CONGRATS,
+    DATE_GIFT,
     created_kb,
+    date_alert_kb,
     format_digest,
     list_card,
     lists_menu,
@@ -96,6 +101,30 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         moved = await postpone_all_to_tomorrow(repo, user, utcnow())
         text = (f"➡️ Перенёс на завтра: {len(moved)}" if moved else "Переносить уже нечего — всё разобрано 👍")
         await cb.message.edit_text(f"{cb.message.html_text}\n\n{text}", reply_markup=None)
+        await cb.answer()
+
+    @router.callback_query(DateAction.filter())
+    async def on_date_action(cb: CallbackQuery, callback_data: DateAction):
+        user = await ensure_user(cb)
+        memory = await repo.memory_by_id(user.id, callback_data.memory_id)
+        if memory is None:
+            await cb.answer("Этой даты в памяти уже нет")
+            return
+        if callback_data.action == "skip":
+            await cb.message.edit_text(f"{cb.message.html_text}\n\n👌 Хорошо, без напоминаний", reply_markup=None)
+            await cb.answer()
+            return
+        occurs = datetime.strptime(str(callback_data.occurs), "%Y%m%d").date()
+        now = utcnow()
+        gift = callback_data.action == "gift"
+        due = reminder_at(occurs, GIFT_OFFSET if gift else CONGRATS_OFFSET, now, user.timezone)
+        title = f"{'Купить подарок' if gift else 'Поздравить'} — {memory.content}"
+        task = await repo.create_task(user.id, title=title, due_at=due)
+        done = callback_data.done | (DATE_GIFT if gift else DATE_CONGRATS)
+        note = f"✅ Напомню {'купить подарок' if gift else 'поздравить'}: {format_local(task.due_at, user.timezone)}"
+        today = to_local(now, user.timezone).date()
+        up = UpcomingDate(memory=memory, occurs=occurs, days=(occurs - today).days)
+        await cb.message.edit_text(f"{cb.message.html_text}\n{note}", reply_markup=date_alert_kb(up, done))
         await cb.answer()
 
     @router.message(Command("lists"))
