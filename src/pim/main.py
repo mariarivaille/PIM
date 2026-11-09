@@ -6,6 +6,7 @@ from pim.config import get_settings
 from pim.core.db import init_db, make_engine, make_sessionmaker
 from pim.core.repository import Repository
 from pim.llm.factory import make_provider
+from pim.memory.reflection import Reflector
 from pim.reminders.scheduler import ReminderScheduler
 from pim.stt.factory import make_transcriber
 from pim.telegram.bot import TelegramNotifier, make_bot, make_dispatcher, setup_commands
@@ -29,12 +30,17 @@ async def main() -> None:
     repo = Repository(make_sessionmaker(engine))
 
     history = History(repo, settings.history_size, ttl_seconds=settings.history_ttl_minutes * 60)
-    agent = Agent(make_provider(settings), repo, history)
+    llm = make_provider(settings)
+    agent = Agent(llm, repo, history, max_memories=settings.max_memories)
     transcriber = make_transcriber(settings)
     bot = make_bot(settings)
     dp = make_dispatcher(agent, repo, settings, transcriber)
     dp.startup.register(setup_commands)
-    scheduler = ReminderScheduler(repo, TelegramNotifier(bot), settings.reminder_poll_seconds)
+    scheduler = ReminderScheduler(
+        repo, TelegramNotifier(bot), settings.reminder_poll_seconds,
+        reflector=Reflector(llm, repo, settings.max_memories),
+        reflection_idle_minutes=settings.reflection_idle_minutes,
+    )
 
     background = [asyncio.create_task(scheduler.run_forever())]
     if transcriber is not None:

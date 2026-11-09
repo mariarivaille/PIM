@@ -6,7 +6,7 @@ import pytest
 from pim.agent.agent import Agent, History
 from pim.agent.commands import parse_delete_facts
 from pim.agent.tools import ToolContext, run_tool
-from pim.core.models import MemoryKind, utcnow
+from pim.core.models import MemoryKind, MemorySource, utcnow
 from pim.core.timeutils import to_local
 from pim.llm.base import Message, ToolCall
 from pim.telegram.keyboards import memory_list
@@ -93,24 +93,31 @@ async def test_user_messages_are_processed_in_order(repo, user):
 
 def test_memory_list_rendering(user):
     class M:
-        def __init__(self, number, kind, content, expires_at=None):
+        def __init__(self, number, kind, content, expires_at=None, source=MemorySource.EXPLICIT):
             self.number, self.kind, self.content, self.expires_at = number, kind, content, expires_at
+            self.source = source
 
     text = memory_list([
         M(1, MemoryKind.FACT, "работаю из дома по пт"),
         M(2, MemoryKind.PERSON, "мама <Ольга>"),
-        M(5, MemoryKind.FACT, "в отпуске", utcnow() + timedelta(days=2)),
+        M(5, MemoryKind.FACT, "в отпуске", utcnow() + timedelta(days=2), MemorySource.INFERRED),
     ], TZ)
     assert text.index("Люди") < text.index("Прочее")
     assert "2. мама &lt;Ольга&gt;" in text and "5. в отпуске" in text and "(до " in text
-    assert "удали факт" in text
+    assert "удали факт" in text and "5. в отпуске" in text and "(сам)" in text
+    assert "запоминаю сам" in text and "только по просьбе" in memory_list([], TZ, auto_memory=False)
     assert "ничего" in memory_list([], TZ)
 
 
 async def test_remember_requires_explicit_request(repo, user):
     for text in ["я хожу в спортзал по вт и чт", "напомни завтра позвонить маме"]:
         res = await run_tool(ToolContext(repo, user, user_text=text), "remember", {"content": "x"})
-        assert "error" in res and "Запомнить это?" in res["error"]
+        # автозапоминание включено: не переспрашивать, рефлексия подберёт сама
+        assert "error" in res and "система запомнит сама" in res["error"]
+    user.auto_memory = False
+    res = await run_tool(ToolContext(repo, user, user_text="я сова"), "remember", {"content": "x"})
+    assert "Запомнить это?" in res["error"]
+    user.auto_memory = True
     for text in ["Запомни: мама — Ольга", "учти, что я сова", "имей ввиду, я в отпуске", "знай, что я веган",
                  "не забывай, что у меня аллергия"]:
         assert "remembered" in await run_tool(ToolContext(repo, user, user_text=text), "remember", {"content": text})

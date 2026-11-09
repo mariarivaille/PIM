@@ -41,8 +41,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         await message.answer(
             "Привет! Я Pim. Пиши или наговаривай мне дела — я запишу и напомню.\n"
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
-            "Могу запомнить важное о тебе: «запомни, что мама — Ольга, ДР 12 марта». "
-            "Удалить факт: «удали факт 3».\n\n"
+            "Запоминаю важное о тебе: сам из разговоров или по просьбе — «запомни, что мама — Ольга, ДР 12 марта». "
+            "Посмотреть — /memory, удалить — «удали факт 3».\n\n"
             "/tasks — список дел\n/digest — сводка на сегодня\n/memory — что я о тебе знаю\n"
             "/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
@@ -78,7 +78,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     @router.message(Command("memory"))
     async def memory(message: Message):
         user = await ensure_user(message)
-        await message.answer(memory_list(await repo.list_memories(user.id), user.timezone))
+        await message.answer(memory_list(await repo.list_memories(user.id), user.timezone, user.auto_memory))
 
     @router.message(F.text)
     async def on_text(message: Message):

@@ -4,8 +4,9 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from pim.core.models import Memory, MemoryKind, Task, TaskStatus, utcnow
+from pim.core.models import Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, to_local
+from pim.memory.reflection import ReflectionResult
 from pim.reminders.digest import Digest
 
 # Лимит Telegram 4096 символов, оставляем запас на разметку
@@ -28,18 +29,26 @@ MEMORY_SECTIONS = [
 
 def _memory_line(memory: Memory, tz: str) -> str:
     until = f" <i>(до {format_local(memory.expires_at, tz)})</i>" if memory.expires_at else ""
-    return f"{memory.number}. {html.escape(memory.content)}{until}"
+    auto = " <i>(сам)</i>" if memory.source == MemorySource.INFERRED else ""
+    return f"{memory.number}. {html.escape(memory.content)}{until}{auto}"
 
 
 def memory_card(memory: Memory, tz: str) -> str:
     return f"📌 Запомнил — {_memory_line(memory, tz)}"
 
 
-def memory_list(memories: list[Memory], tz: str) -> str:
+AUTO_MEMORY_HINT = {
+    True: "Важное из разговоров запоминаю сам (помечено «сам»). Выключить: «не запоминай ничего сам».",
+    False: "Сам ничего не запоминаю, только по просьбе. Включить: «запоминай сам».",
+}
+
+
+def memory_list(memories: list[Memory], tz: str, auto_memory: bool = True) -> str:
     """Всё, что бот знает о пользователе, по разделам, с номерами для «удали факт N»."""
     if not memories:
         return ("Я пока ничего о тебе не знаю.\n"
-                "Скажи, например: «запомни, что мама — Ольга, день рождения 12 марта».")
+                "Скажи, например: «запомни, что мама — Ольга, день рождения 12 марта».\n\n"
+                + AUTO_MEMORY_HINT[auto_memory])
     parts = ["<b>Что я о тебе знаю</b>"]
     for kind, title in MEMORY_SECTIONS:
         items = [m for m in memories if m.kind == kind]
@@ -47,7 +56,21 @@ def memory_list(memories: list[Memory], tz: str) -> str:
             parts.append(f"\n<b>{title}</b>")
             parts += [_memory_line(m, tz) for m in items]
     parts.append("\nЧтобы удалить, напиши «удали факт 3» (можно несколько: «удали факт 3, 5»).")
+    parts.append(AUTO_MEMORY_HINT[auto_memory])
     return _fit(parts)
+
+
+def memory_update_text(result: ReflectionResult, tz: str) -> str:
+    """Сообщение после рефлексии: что бот запомнил сам и что исправил."""
+    parts = []
+    if result.added:
+        parts.append("🧠 <b>Запомнил из разговора</b>")
+        parts += [_memory_line(m, tz) for m in result.added]
+    if result.updated:
+        parts.append(("\n" if parts else "") + "✏️ <b>Уточнил</b>")
+        parts += [_memory_line(m, tz) for m in result.updated]
+    parts.append("\nЕсли что-то лишнее — «удали факт N». Не запоминать самому — «не запоминай ничего сам».")
+    return "\n".join(parts)
 
 
 SNOOZE_OPTIONS = [(15, "+15 мин"), (60, "+1 ч"), (24 * 60, "Завтра")]

@@ -39,8 +39,9 @@ class ToolContext:
     user: User
     # задачи, созданные/изменённые за этот ход — телеграм-слой покажет по ним карточки с кнопками
     touched: list[Task] = field(default_factory=list)
-    # записи памяти, созданные/исправленные за ход — телеграм-слой покажет «📌 Запомнил» с кнопкой «Забыть»
+    # записи памяти, созданные/исправленные за ход — телеграм-слой покажет «📌 Запомнил»
     remembered: list[Memory] = field(default_factory=list)
+    max_memories: int = 150
     # id задач, время которых выбрал бот, а не пользователь — в карточке будет «время выбрал сам»
     auto_time: set[int] = field(default_factory=set)
     # уже просили модель выбрать время за этот ход — второй раз не просим, ставим запасное
@@ -50,8 +51,8 @@ class ToolContext:
     prev_assistant: str = ""
 
 
-# Явная просьба запомнить. Пока бот запоминает только по команде — модели (GigaChat) правило из промпта
-# соблюдают ненадёжно, поэтому проверяем в коде. «\bпомни\b», а не «помни», чтобы не ловить «напомни».
+# Явная просьба запомнить. Посреди разговора факты пишутся в память только по ней (остальное подберёт
+# рефлексия после разговора) — модели (GigaChat) это правило из промпта соблюдают ненадёжно, поэтому проверяем в коде. «\bпомни\b», а не «помни», чтобы не ловить «напомни».
 EXPLICIT_MEMORY_REQUEST = re.compile(
     r"запомн|запиши себе|сохрани|\bучти|учитывай|имей(те)? в ?виду|\bзнай|\bпомни\b|не забывай",
     re.IGNORECASE,
@@ -289,9 +290,19 @@ async def remember(ctx: ToolContext, content: str, kind: str | None = None, unti
     if not content:
         raise ToolError("пустой content")
     if not memory_requested(ctx):
+        if ctx.user.auto_memory:
+            raise ToolError(
+                "пользователь не просил запомнить — посреди разговора ничего не сохраняй и не переспрашивай: "
+                "важное из разговора система запомнит сама, когда он закончится"
+            )
         raise ToolError(
             "пользователь не просил запомнить — в память пишем только по явной просьбе. Ничего не сохраняй; "
             f"если факт выглядит важным, в конце ответа коротко предложи: «{MEMORY_OFFER}»"
+        )
+    if len(await ctx.repo.list_memories(ctx.user.id)) >= ctx.max_memories:
+        raise ToolError(
+            f"память заполнена ({ctx.max_memories} фактов). Скажи пользователю, что сначала нужно удалить "
+            "ненужное: список — /memory, удалить — «удали факт N»"
         )
     memory = await ctx.repo.add_memory(
         ctx.user.id, content, kind=_check_kind(kind), source=MemorySource.EXPLICIT,
@@ -315,6 +326,12 @@ async def update_memory(ctx: ToolContext, number: int, content: str | None = Non
     memory = await ctx.repo.update_memory(ctx.user.id, int(number), **fields)
     ctx.remembered.append(memory)
     return {"updated": memory_view(memory, ctx.user.timezone)}
+
+
+async def set_auto_memory(ctx: ToolContext, enabled: bool) -> dict:
+    await ctx.repo.set_auto_memory(ctx.user.id, bool(enabled))
+    ctx.user.auto_memory = bool(enabled)
+    return {"auto_memory": bool(enabled)}
 
 
 async def forget(ctx: ToolContext, number: int) -> dict:
@@ -483,6 +500,17 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
         ToolSpec("forget", "Удалить факт из памяти, если пользователь просит забыть или он больше не верен.",
                  {"type": "object", "properties": {"number": _MEMORY_NUMBER}, "required": ["number"]}),
         forget,
+    ),
+    "set_auto_memory": (
+        ToolSpec(
+            "set_auto_memory",
+            "Включить или выключить автозапоминание: запоминает ли ассистент сам важное из разговоров "
+            "(«не запоминай ничего сам» / «можешь запоминать сам»). Уже сохранённое не трогает.",
+            {"type": "object",
+             "properties": {"enabled": {"type": "boolean", "description": "true — запоминать сам, false — только по просьбе"}},
+             "required": ["enabled"]},
+        ),
+        set_auto_memory,
     ),
 }
 

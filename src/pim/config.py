@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     history_size: int = 10
     # После такой паузы история диалога забывается
     history_ttl_minutes: int = 60
+    # Через сколько минут тишины бот разбирает разговор и сам запоминает важное
+    reflection_idle_minutes: int = 10
+    # Максимум фактов в памяти на пользователя (вся память идёт в промпт)
+    max_memories: int = 150
     log_level: str = "INFO"
 
     @field_validator("allowed_user_ids", mode="before")

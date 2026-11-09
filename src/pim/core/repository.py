@@ -1,9 +1,18 @@
 from datetime import datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from pim.core.models import ChatMessage, Memory, MemoryKind, MemorySource, Task, TaskStatus, User, utcnow
+from pim.core.models import (
+    ChatMessage,
+    Memory,
+    MemoryKind,
+    MemorySource,
+    Task,
+    TaskStatus,
+    User,
+    utcnow,
+)
 from pim.core.timeutils import next_occurrence
 
 
@@ -50,6 +59,12 @@ class Repository:
             user = await s.get(User, user_id)
             if user:
                 user.last_digest_on = local_date
+
+    async def set_auto_memory(self, user_id: int, enabled: bool) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.auto_memory = enabled
 
     # --- memories ---
     # Пользователь видит и называет факты по `number` — своей нумерации 1, 2, 3…; номера не переиспользуются,
@@ -119,6 +134,44 @@ class Repository:
                 query = query.where(ChatMessage.created_at > user.context_since)
             res = await s.scalars(query.order_by(ChatMessage.id.desc()).limit(limit))
             return list(reversed(list(res)))
+
+    # --- рефлексия: какую переписку ещё не разбирали ---
+
+    async def users_pending_reflection(self, idle_before: datetime) -> list[User]:
+        """Пользователи с автопамятью, у которых есть неразобранные реплики и разговор затих до idle_before."""
+        async with self._sm() as s:
+            last = (
+                select(ChatMessage.user_id, func.max(ChatMessage.created_at).label("last_at"))
+                .group_by(ChatMessage.user_id)
+                .subquery()
+            )
+            res = await s.execute(
+                select(User, last.c.last_at)
+                .join(last, last.c.user_id == User.id)
+                .where(User.auto_memory.is_(True))
+            )
+            pending = []
+            # func.max наследует тип колонки (UTCDateTime), поэтому last_at уже aware UTC
+            for user, last_at in res.all():
+                if last_at <= idle_before and (user.reflected_until is None or last_at > user.reflected_until):
+                    pending.append(user)
+            return pending
+
+    async def messages_to_reflect(self, user_id: int, limit: int) -> list[ChatMessage]:
+        """Неразобранные реплики (не больше limit последних), в хронологическом порядке."""
+        async with self._sm() as s:
+            user = await s.get(User, user_id)
+            query = select(ChatMessage).where(ChatMessage.user_id == user_id)
+            if user and user.reflected_until:
+                query = query.where(ChatMessage.created_at > user.reflected_until)
+            res = await s.scalars(query.order_by(ChatMessage.id.desc()).limit(limit))
+            return list(reversed(list(res)))
+
+    async def mark_reflected(self, user_id: int, until: datetime) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.reflected_until = until
 
     async def reset_context(self, user_id: int, at: datetime | None = None) -> None:
         async with self._sm() as s, s.begin():

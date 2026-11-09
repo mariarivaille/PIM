@@ -50,6 +50,10 @@ class User(Base):
     context_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Последний выданный номер факта в памяти (у каждого пользователя своя нумерация)
     memory_seq: Mapped[int] = mapped_column(default=0, server_default="0")
+    # Бот сам запоминает важное из разговоров (рефлексия); пользователь может выключить
+    auto_memory: Mapped[bool] = mapped_column(default=True, server_default="1")
+    # До какого момента переписка уже разобрана рефлексией
+    reflected_until: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
