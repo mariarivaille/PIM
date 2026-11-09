@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     gigachat_model: str = "GigaChat-2-Max"
     gigachat_verify_ssl: bool = False
 
+    # Распознавание голосовых: whisper (локально) | none (выключено)
+    stt_provider: Literal["whisper", "none"] = "whisper"
+    whisper_model: str = "large-v3-turbo"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+    whisper_cpu_threads: int = 4
+    max_voice_seconds: int = 300
+
     database_url: str = "sqlite+aiosqlite:///./aid.db"
     default_timezone: str = "Europe/Moscow"
     reminder_poll_seconds: int = 30

@@ -5,14 +5,16 @@
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
 
-from aid.core.models import Task, User
+from aid.core.models import Task, User, utcnow
 from aid.core.repository import Repository
-from aid.core.timeutils import format_local, parse_local
+from aid.core.timeutils import DAY_KEYWORDS, format_local, parse_local, resolve_day_time, to_local
 from aid.llm.base import ToolSpec
 from aid.reminders.digest import parse_hhmm
 
@@ -51,6 +53,24 @@ def _parse_due(ctx: ToolContext, value: str | None):
         raise ToolError(f"due_at должен быть ISO 8601, например 2026-10-30T15:00, получено {value!r}") from e
 
 
+def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: str | None,
+                 in_minutes: int | None) -> datetime | None:
+    """Время напоминания из того, что дала модель. Даты считает код, а не LLM."""
+    if in_minutes:
+        return utcnow() + timedelta(minutes=int(in_minutes))
+    if due_at:
+        return _parse_due(ctx, due_at)
+    if not day and not time:
+        return None
+    if day and day not in DAY_KEYWORDS:
+        raise ToolError(f"day должен быть одним из {DAY_KEYWORDS}, получено {day!r}")
+    try:
+        at = parse_hhmm(time) if time else None
+    except ValueError as e:
+        raise ToolError(f"time нужно в формате HH:MM, получено {time!r}") from e
+    return resolve_day_time(utcnow(), ctx.user.timezone, day, at)
+
+
 def _check_rrule(value: str | None) -> str | None:
     if not value:
         return None
@@ -72,10 +92,11 @@ async def _get(ctx: ToolContext, task_id: int) -> Task:
 # --- handlers ---
 
 
-async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, rrule: str | None = None,
+async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, day: str | None = None,
+                      time: str | None = None, in_minutes: int | None = None, rrule: str | None = None,
                       notes: str | None = None) -> dict:
     rrule = _check_rrule(rrule)
-    due = _parse_due(ctx, due_at)
+    due = _resolve_due(ctx, due_at, day, time, in_minutes)
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
     task = await ctx.repo.create_task(ctx.user.id, title=title, due_at=due, rrule=rrule, notes=notes)
@@ -89,13 +110,22 @@ async def list_tasks(ctx: ToolContext) -> dict:
 
 
 async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, due_at: str | None = None,
+                      day: str | None = None, time: str | None = None, in_minutes: int | None = None,
                       rrule: str | None = None, notes: str | None = None) -> dict:
-    await _get(ctx, task_id)
+    task = await _get(ctx, task_id)
     fields: dict[str, Any] = {}
     if title:
         fields["title"] = title
-    if due_at:
-        fields["due_at"] = _parse_due(ctx, due_at)
+    if time and not (day or due_at or in_minutes) and task.due_at:
+        # «перенеси на 12» — тот же день, другое время
+        local = to_local(task.due_at, ctx.user.timezone)
+        try:
+            at = parse_hhmm(time)
+        except ValueError as e:
+            raise ToolError(f"time нужно в формате HH:MM, получено {time!r}") from e
+        fields["due_at"] = local.replace(hour=at.hour, minute=at.minute).astimezone(dt_timezone.utc)
+    elif due := _resolve_due(ctx, due_at, day, time, in_minutes):
+        fields["due_at"] = due
     if rrule is not None:
         fields["rrule"] = _check_rrule(rrule)
     if notes is not None:
@@ -149,8 +179,17 @@ async def set_digest_time(ctx: ToolContext, time: str) -> dict:
 
 _DUE = {
     "type": "string",
-    "description": "Когда напомнить, локальное время пользователя в ISO 8601 без смещения, например 2026-10-30T15:00",
+    "description": "Только для конкретной календарной даты («15 декабря в 18»): локальное время в ISO 8601 "
+                   "без смещения, например 2026-12-15T18:00. Для «завтра», «в пятницу» используй day+time.",
 }
+_DAY = {
+    "type": "string",
+    "enum": DAY_KEYWORDS,
+    "description": "День напоминания словом: today, tomorrow, day_after_tomorrow или день недели mon..sun "
+                   "(ближайший будущий). Дату по дню недели НЕ вычисляй — передай день сюда.",
+}
+_TIME = {"type": "string", "description": "Время напоминания HH:MM, например 19:00"}
+_IN_MINUTES = {"type": "integer", "description": "Для «через N минут/часов»: через сколько минут напомнить"}
 _RRULE = {
     "type": "string",
     "description": "Правило повтора RFC 5545 без DTSTART, например FREQ=DAILY или FREQ=WEEKLY;BYDAY=TU,TH. "
@@ -169,6 +208,9 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Короткая формулировка дела в инфинитиве"},
+                    "day": _DAY,
+                    "time": _TIME,
+                    "in_minutes": _IN_MINUTES,
                     "due_at": _DUE,
                     "rrule": _RRULE,
                     "notes": {"type": "string", "description": "Доп. детали, если есть"},
@@ -192,6 +234,9 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                 "properties": {
                     "task_id": _ID,
                     "title": {"type": "string", "description": "Новое название"},
+                    "day": _DAY,
+                    "time": {**_TIME, "description": "Новое время HH:MM; без day — тот же день, другое время"},
+                    "in_minutes": _IN_MINUTES,
                     "due_at": _DUE,
                     "rrule": {**_RRULE, "description": _RRULE["description"] + " Пустая строка снимает повтор."},
                     "notes": {"type": "string", "description": "Новые заметки"},

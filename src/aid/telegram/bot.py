@@ -9,6 +9,7 @@ from aid.core.models import Task, User
 from aid.core.repository import Repository
 from aid.telegram.handlers import make_router
 from aid.reminders.digest import Digest
+from aid.stt.base import Transcriber
 from aid.telegram.keyboards import format_digest, reminder_kb, task_card
 
 
@@ -40,10 +41,11 @@ def make_bot(settings: Settings) -> Bot:
     return Bot(settings.telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
-def make_dispatcher(agent: Agent, repo: Repository, settings: Settings) -> Dispatcher:
+def make_dispatcher(agent: Agent, repo: Repository, settings: Settings,
+                    transcriber: Transcriber | None = None) -> Dispatcher:
     dp = Dispatcher()
     allowlist = AllowlistMiddleware(settings.allowed_user_ids)
     dp.message.outer_middleware(allowlist)
     dp.callback_query.outer_middleware(allowlist)
-    dp.include_router(make_router(agent, repo, settings))
+    dp.include_router(make_router(agent, repo, settings, transcriber))
     return dp

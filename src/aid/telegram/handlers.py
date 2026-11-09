@@ -3,9 +3,9 @@ import logging
 from datetime import timedelta
 
 from aiogram import F, Router
-from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
+from aiogram.utils.chat_action import ChatActionSender
 
 from aid.agent.agent import Agent
 from aid.config import Settings
@@ -13,12 +13,13 @@ from aid.core.models import utcnow
 from aid.core.repository import Repository
 from aid.core.timeutils import format_local
 from aid.reminders.digest import build_digest
+from aid.stt.base import Transcriber
 from aid.telegram.keyboards import TaskAction, created_kb, format_digest, task_card
 
 log = logging.getLogger(__name__)
 
 
-def make_router(agent: Agent, repo: Repository, settings: Settings) -> Router:
+def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber: Transcriber | None) -> Router:
     router = Router()
 
     async def ensure_user(msg_or_cb):
@@ -31,7 +32,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings) -> Router:
         user = await ensure_user(message)
         digest = f"в {user.digest_time}" if user.digest_time else "выключена"
         await message.answer(
-            "Привет! Пиши мне дела обычным текстом — я запишу и напомню.\n"
+            "Привет! Пиши или наговаривай мне дела — я запишу и напомню.\n"
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
             "/tasks — список дел\n/digest — сводка на сегодня\n/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
@@ -66,9 +67,36 @@ def make_router(agent: Agent, repo: Repository, settings: Settings) -> Router:
     @router.message(F.text)
     async def on_text(message: Message):
         user = await ensure_user(message)
-        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            await process(message, user, message.text)
+
+    @router.message(F.voice | F.audio | F.video_note)
+    async def on_voice(message: Message):
+        if transcriber is None:
+            await message.answer("Голосовые выключены, напиши текстом.")
+            return
+        media = message.voice or message.audio or message.video_note
+        if media.duration and media.duration > settings.max_voice_seconds:
+            await message.answer(f"Слишком длинное, я разбираю до {settings.max_voice_seconds // 60} мин.")
+            return
+        user = await ensure_user(message)
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            try:
+                audio = await message.bot.download(media)
+                text = await transcriber.transcribe(audio.getvalue())
+            except Exception:
+                log.exception("transcription failed")
+                await message.answer("Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")
+                return
+            if not text:
+                await message.answer("Не расслышал, повтори, пожалуйста.")
+                return
+            await message.answer(f"🎙 <i>{html.escape(text)}</i>")
+            await process(message, user, text)
+
+    async def process(message: Message, user, text: str):
         try:
-            reply = await agent.handle(user, message.text)
+            reply = await agent.handle(user, text)
         except Exception:
             log.exception("agent failed")
             await message.answer("Что-то пошло не так с моделью, попробуй ещё раз.")

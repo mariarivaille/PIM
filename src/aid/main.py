@@ -7,7 +7,17 @@ from aid.core.db import init_db, make_engine, make_sessionmaker
 from aid.core.repository import Repository
 from aid.llm.factory import make_provider
 from aid.reminders.scheduler import ReminderScheduler
+from aid.stt.factory import make_transcriber
 from aid.telegram.bot import TelegramNotifier, make_bot, make_dispatcher
+
+log = logging.getLogger(__name__)
+
+
+async def _warmup(transcriber) -> None:
+    try:
+        await transcriber.warmup()
+    except Exception:
+        log.exception("STT warmup failed, voice messages will retry on first use")
 
 
 async def main() -> None:
@@ -20,15 +30,20 @@ async def main() -> None:
 
     history = History(settings.history_size, ttl_seconds=settings.history_ttl_minutes * 60)
     agent = Agent(make_provider(settings), repo, history)
+    transcriber = make_transcriber(settings)
     bot = make_bot(settings)
-    dp = make_dispatcher(agent, repo, settings)
+    dp = make_dispatcher(agent, repo, settings, transcriber)
     scheduler = ReminderScheduler(repo, TelegramNotifier(bot), settings.reminder_poll_seconds)
 
-    scheduler_task = asyncio.create_task(scheduler.run_forever())
+    background = [asyncio.create_task(scheduler.run_forever())]
+    if transcriber is not None:
+        # модель грузится (и при первом запуске скачивается) в фоне, бот уже отвечает на текст
+        background.append(asyncio.create_task(_warmup(transcriber)))
     try:
         await dp.start_polling(bot)
     finally:
-        scheduler_task.cancel()
+        for task in background:
+            task.cancel()
         await bot.session.close()
         await engine.dispose()
 

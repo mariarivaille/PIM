@@ -5,5 +5,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: sqlite+aiosqlite:////data/aid.db
+      # модель Whisper (~1.6 ГБ) кэшируется на хосте, чтобы не качать при каждой пересборке
+      HF_HOME: /data/hf-cache
     volumes:
       - ./data:/data

@@ -6,6 +6,8 @@
 
 - Слои: `telegram/` → `agent/` → `llm/`, `core/`; `reminders/` → `core/`. Ядро (`core`, `agent`, `reminders`) не импортирует aiogram.
 - Время напоминания решает БД + `ReminderScheduler`, а не LLM.
+- Даты тоже считает код: модель отдаёт `day`/`time`/`in_minutes`, `due_at` (ISO) — только для явной календарной даты.
+  GigaChat ошибается с днями недели даже с календарём в промпте.
 - Все datetime — aware; в БД UTC (`UTCDateTime`). От LLM — локальное ISO без смещения → `parse_local`.
 - Новые инструменты агента — в `agent/tools.py`; JSON Schema без `anyOf`/`null` (ограничение GigaChat).
 - Ошибки, которые модель может исправить, — `ToolError` (уходят модели как `{"error": ...}`).
