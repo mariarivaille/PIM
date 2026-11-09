@@ -17,11 +17,12 @@ class Digest:
     day: datetime  # полночь текущего локального дня
     overdue: list[Task] = field(default_factory=list)
     today: list[Task] = field(default_factory=list)
+    upcoming: list[Task] = field(default_factory=list)
     undated: list[Task] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not (self.overdue or self.today or self.undated)
+        return not (self.overdue or self.today or self.upcoming or self.undated)
 
 
 def parse_hhmm(value: str) -> time:
@@ -41,6 +42,8 @@ async def build_digest(repo: Repository, user: User, now: datetime) -> Digest:
             digest.overdue.append(task)
         elif task.due_at < day_end:
             digest.today.append(task)
+        else:
+            digest.upcoming.append(task)
     return digest
 
 

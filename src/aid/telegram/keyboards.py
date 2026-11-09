@@ -8,7 +8,8 @@ from aid.core.models import Task
 from aid.core.timeutils import WEEKDAYS_RU, format_local, to_local
 from aid.reminders.digest import Digest
 
-MAX_UNDATED = 5
+# Лимит Telegram 4096 символов, оставляем запас на разметку
+MAX_MESSAGE_CHARS = 3800
 
 
 class TaskAction(CallbackData, prefix="t"):
@@ -55,12 +56,25 @@ def format_digest(digest: Digest, tz: str) -> str:
         parts += [_digest_line(t, tz, with_date=False) for t in digest.today]
     else:
         parts.append("\nНа сегодня ничего не запланировано.")
+    if digest.upcoming:
+        parts.append("\n<b>Дальше:</b>")
+        parts += [_digest_line(t, tz, with_date=True) for t in digest.upcoming]
     if digest.undated:
         parts.append("\n<b>Без срока:</b>")
-        parts += [_digest_line(t, tz, with_date=False) for t in digest.undated[:MAX_UNDATED]]
-        if len(digest.undated) > MAX_UNDATED:
-            parts.append(f"…и ещё {len(digest.undated) - MAX_UNDATED}, полный список — /tasks")
-    return "\n".join(parts)
+        parts += [_digest_line(t, tz, with_date=False) for t in digest.undated]
+    return _fit(parts)
+
+
+def _fit(lines: list[str]) -> str:
+    """Обрезает сводку по целым строкам, чтобы влезть в лимит сообщения Telegram."""
+    out, size = [], 0
+    for i, line in enumerate(lines):
+        if size + len(line) + 1 > MAX_MESSAGE_CHARS:
+            out.append(f"…и ещё {sum(1 for l in lines[i:] if l.startswith('•'))} дел, не влезло в сообщение")
+            break
+        out.append(line)
+        size += len(line) + 1
+    return "\n".join(out)
 
 
 def created_kb(task: Task) -> InlineKeyboardMarkup:

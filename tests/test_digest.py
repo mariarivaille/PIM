@@ -25,10 +25,20 @@ async def test_build_digest_sections(repo, user):
     d = await build_digest(repo, user, NOW)
     assert [t.title for t in d.overdue] == ["старое"]
     assert [t.title for t in d.today] == ["утро", "вечер"]
+    assert [t.title for t in d.upcoming] == ["завтра"]
     assert [t.title for t in d.undated] == ["когда-нибудь"]
 
     rendered = format_digest(d, TZ)
-    assert "вт 10.11" in rendered and "23:30 — вечер" in rendered and "завтра" not in rendered
+    assert "вт 10.11" in rendered and "23:30 — вечер" in rendered
+    assert "ср 11.11 00:10 — завтра" in rendered
+
+
+async def test_long_digest_is_truncated(repo, user):
+    for i in range(300):
+        await repo.create_task(user.id, f"дело номер {i} с довольно длинным названием")
+    rendered = format_digest(await build_digest(repo, user, NOW), TZ)
+    assert len(rendered) <= 4096
+    assert rendered.endswith("не влезло в сообщение")
 
 
 async def test_empty_digest(repo, user):
