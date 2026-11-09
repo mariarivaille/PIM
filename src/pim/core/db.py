@@ -45,7 +45,20 @@ def _add_missing_columns(conn) -> None:
                 conn.exec_driver_sql(f"ALTER TABLE {table.name} ADD COLUMN {ddl}")
 
 
+def _backfill_memory_numbers(conn) -> None:
+    """Фактам, сохранённым до появления нумерации, — номера по порядку создания, и счётчик у пользователя."""
+    conn.exec_driver_sql(
+        "UPDATE memories SET number = (SELECT COUNT(*) FROM memories m2 "
+        "WHERE m2.user_id = memories.user_id AND m2.id <= memories.id) WHERE number IS NULL"
+    )
+    conn.exec_driver_sql(
+        "UPDATE users SET memory_seq = (SELECT COALESCE(MAX(number), 0) FROM memories WHERE user_id = users.id) "
+        "WHERE memory_seq < (SELECT COALESCE(MAX(number), 0) FROM memories WHERE user_id = users.id)"
+    )
+
+
 async def init_db(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_add_missing_columns)
+        await conn.run_sync(_backfill_memory_numbers)

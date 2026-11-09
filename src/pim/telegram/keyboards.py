@@ -18,53 +18,36 @@ class TaskAction(CallbackData, prefix="t"):
     minutes: int = 0
 
 
-class MemoryAction(CallbackData, prefix="m"):
-    action: str  # forget — из карточки «Запомнил»; forget_list — из списка /memory
-    memory_id: int
-
-
 MEMORY_SECTIONS = [
     (MemoryKind.PERSON, "👤 Люди"),
     (MemoryKind.ROUTINE, "🔁 Распорядок и привычки"),
     (MemoryKind.PREFERENCE, "⭐ Предпочтения"),
     (MemoryKind.FACT, "📝 Прочее"),
 ]
-# Inline-клавиатура Telegram ограничена 100 кнопками
-MAX_MEMORY_BUTTONS = 60
 
 
 def _memory_line(memory: Memory, tz: str) -> str:
     until = f" <i>(до {format_local(memory.expires_at, tz)})</i>" if memory.expires_at else ""
-    return f"{html.escape(memory.content)}{until}"
+    return f"{memory.number}. {html.escape(memory.content)}{until}"
 
 
-def memory_card(memory: Memory, tz: str) -> tuple[str, InlineKeyboardMarkup]:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Забыть", callback_data=MemoryAction(action="forget", memory_id=memory.id))
-    return f"📌 Запомнил: {_memory_line(memory, tz)}", kb.as_markup()
+def memory_card(memory: Memory, tz: str) -> str:
+    return f"📌 Запомнил — {_memory_line(memory, tz)}"
 
 
-def memory_list(memories: list[Memory], tz: str) -> tuple[str, InlineKeyboardMarkup | None]:
-    """Всё, что бот знает о пользователе, по разделам; кнопки 🗑 N удаляют запись N."""
+def memory_list(memories: list[Memory], tz: str) -> str:
+    """Всё, что бот знает о пользователе, по разделам, с номерами для «удали факт N»."""
     if not memories:
         return ("Я пока ничего о тебе не знаю.\n"
-                "Скажи, например: «запомни, что мама — Ольга, день рождения 12 марта».", None)
+                "Скажи, например: «запомни, что мама — Ольга, день рождения 12 марта».")
     parts = ["<b>Что я о тебе знаю</b>"]
-    kb = InlineKeyboardBuilder()
-    n = 0
     for kind, title in MEMORY_SECTIONS:
         items = [m for m in memories if m.kind == kind]
-        if not items:
-            continue
-        parts.append(f"\n<b>{title}</b>")
-        for m in items:
-            n += 1
-            parts.append(f"{n}. {_memory_line(m, tz)}")
-            if n <= MAX_MEMORY_BUTTONS:
-                kb.button(text=f"🗑 {n}", callback_data=MemoryAction(action="forget_list", memory_id=m.id))
-    parts.append("\nЧтобы удалить запись, нажми 🗑 с её номером или скажи «забудь, что …».")
-    kb.adjust(6)
-    return _fit(parts), kb.as_markup()
+        if items:
+            parts.append(f"\n<b>{title}</b>")
+            parts += [_memory_line(m, tz) for m in items]
+    parts.append("\nЧтобы удалить, напиши «удали факт 3» (можно несколько: «удали факт 3, 5»).")
+    return _fit(parts)
 
 
 SNOOZE_OPTIONS = [(15, "+15 мин"), (60, "+1 ч"), (24 * 60, "Завтра")]

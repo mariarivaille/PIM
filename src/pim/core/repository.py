@@ -52,19 +52,27 @@ class Repository:
                 user.last_digest_on = local_date
 
     # --- memories ---
+    # Пользователь видит и называет факты по `number` — своей нумерации 1, 2, 3…; номера не переиспользуются,
+    # чтобы «удали факт 5» не попало в другой факт после удаления соседних.
 
     async def add_memory(self, user_id: int, content: str, kind: MemoryKind = MemoryKind.FACT,
                          source: MemorySource = MemorySource.EXPLICIT,
                          expires_at: datetime | None = None) -> Memory:
         async with self._sm() as s, s.begin():
-            memory = Memory(user_id=user_id, content=content, kind=kind, source=source, expires_at=expires_at)
+            user = await s.get(User, user_id)
+            number = (user.memory_seq or 0) + 1
+            user.memory_seq = number
+            memory = Memory(user_id=user_id, number=number, content=content, kind=kind, source=source,
+                            expires_at=expires_at)
             s.add(memory)
         return memory
 
-    async def get_memory(self, user_id: int, memory_id: int) -> Memory | None:
+    async def _memory_by_number(self, s: AsyncSession, user_id: int, number: int) -> Memory | None:
+        return await s.scalar(select(Memory).where(Memory.user_id == user_id, Memory.number == number))
+
+    async def get_memory(self, user_id: int, number: int) -> Memory | None:
         async with self._sm() as s:
-            memory = await s.get(Memory, memory_id)
-            return memory if memory and memory.user_id == user_id else None
+            return await self._memory_by_number(s, user_id, number)
 
     async def list_memories(self, user_id: int, now: datetime | None = None) -> list[Memory]:
         """Актуальные воспоминания пользователя (истёкшие не возвращаются)."""
@@ -73,23 +81,23 @@ class Repository:
             res = await s.scalars(
                 select(Memory)
                 .where(Memory.user_id == user_id, or_(Memory.expires_at.is_(None), Memory.expires_at > now))
-                .order_by(Memory.kind, Memory.id)
+                .order_by(Memory.number)
             )
             return list(res)
 
-    async def update_memory(self, user_id: int, memory_id: int, **fields) -> Memory | None:
+    async def update_memory(self, user_id: int, number: int, **fields) -> Memory | None:
         async with self._sm() as s, s.begin():
-            memory = await s.get(Memory, memory_id)
-            if not memory or memory.user_id != user_id:
+            memory = await self._memory_by_number(s, user_id, number)
+            if not memory:
                 return None
             for k, v in fields.items():
                 setattr(memory, k, v)
             return memory
 
-    async def delete_memory(self, user_id: int, memory_id: int) -> Memory | None:
+    async def delete_memory(self, user_id: int, number: int) -> Memory | None:
         async with self._sm() as s, s.begin():
-            memory = await s.get(Memory, memory_id)
-            if not memory or memory.user_id != user_id:
+            memory = await self._memory_by_number(s, user_id, number)
+            if not memory:
                 return None
             await s.delete(memory)
             return memory

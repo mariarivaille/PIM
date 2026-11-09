@@ -15,7 +15,6 @@ from pim.core.timeutils import format_local
 from pim.reminders.digest import build_digest
 from pim.stt.base import Transcriber
 from pim.telegram.keyboards import (
-    MemoryAction,
     TaskAction,
     created_kb,
     format_digest,
@@ -42,7 +41,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         await message.answer(
             "Привет! Я Pim. Пиши или наговаривай мне дела — я запишу и напомню.\n"
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
-            "Могу запомнить важное о тебе: «запомни, что мама — Ольга, ДР 12 марта».\n\n"
+            "Могу запомнить важное о тебе: «запомни, что мама — Ольга, ДР 12 марта». "
+            "Удалить факт: «удали факт 3».\n\n"
             "/tasks — список дел\n/digest — сводка на сегодня\n/memory — что я о тебе знаю\n"
             "/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
@@ -78,8 +78,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     @router.message(Command("memory"))
     async def memory(message: Message):
         user = await ensure_user(message)
-        text, kb = memory_list(await repo.list_memories(user.id), user.timezone)
-        await message.answer(text, reply_markup=kb)
+        await message.answer(memory_list(await repo.list_memories(user.id), user.timezone))
 
     @router.message(F.text)
     async def on_text(message: Message):
@@ -128,24 +127,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
                 await message.answer(task_card(t, user.timezone, auto_time=t.id in reply.auto_time),
                                      reply_markup=created_kb(t))
         for m in {m.id: m for m in reply.remembered}.values():
-            text, kb = memory_card(m, user.timezone)
-            await message.answer(text, reply_markup=kb)
-
-    @router.callback_query(MemoryAction.filter())
-    async def on_memory_action(cb: CallbackQuery, callback_data: MemoryAction):
-        user = await ensure_user(cb)
-        memory = await repo.delete_memory(user.id, callback_data.memory_id)
-        if callback_data.action == "forget_list":
-            # перерисовываем список /memory без удалённой записи
-            text, kb = memory_list(await repo.list_memories(user.id), user.timezone)
-            await cb.message.edit_text(text, reply_markup=kb)
-            await cb.answer("Забыл" if memory else "Уже удалено")
-            return
-        if memory is None:
-            await cb.answer("Уже удалено")
-            return
-        await cb.message.edit_text(f"🗑 Забыл: <s>{html.escape(memory.content)}</s>", reply_markup=None)
-        await cb.answer()
+            await message.answer(memory_card(m, user.timezone))
 
     @router.callback_query(TaskAction.filter())
     async def on_action(cb: CallbackQuery, callback_data: TaskAction):

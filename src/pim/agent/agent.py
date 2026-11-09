@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Callable
 
+from pim.agent.commands import parse_delete_facts
 from pim.agent.prompts import build_system_prompt
 from pim.agent.tools import TOOLS, ToolContext, memory_view, run_tool, task_view
 from pim.core.models import Memory, Task, User, utcnow
@@ -65,7 +66,18 @@ class Agent:
 
     async def handle(self, user: User, text: str) -> AgentReply:
         async with self._locks[user.id]:
+            if (numbers := parse_delete_facts(text)) is not None:
+                reply = await self._delete_facts(user, numbers)
+                await self.history.add(user.id, Message("user", text), Message("assistant", reply.text))
+                return reply
             return await self._handle(user, text)
+
+    async def _delete_facts(self, user: User, numbers: list[int]) -> AgentReply:
+        lines = []
+        for n in numbers:
+            memory = await self._repo.delete_memory(user.id, n)
+            lines.append(f"🗑 Забыл факт {n}: {memory.content}" if memory else f"Факта {n} нет в памяти")
+        return AgentReply(text="\n".join(lines))
 
     async def _system_message(self, user: User) -> Message:
         tasks = await self._repo.list_open_tasks(user.id)

@@ -254,7 +254,7 @@ async def set_digest_time(ctx: ToolContext, time: str) -> dict:
 
 
 def memory_view(memory: Memory, tz: str) -> dict[str, Any]:
-    view = {"id": memory.id, "kind": memory.kind, "content": memory.content}
+    view = {"number": memory.number, "kind": memory.kind, "content": memory.content}
     if memory.expires_at:
         view["until"] = format_local(memory.expires_at, tz)
     return view
@@ -301,10 +301,10 @@ async def remember(ctx: ToolContext, content: str, kind: str | None = None, unti
     return {"remembered": memory_view(memory, ctx.user.timezone)}
 
 
-async def update_memory(ctx: ToolContext, memory_id: int, content: str | None = None, kind: str | None = None,
+async def update_memory(ctx: ToolContext, number: int, content: str | None = None, kind: str | None = None,
                         until_day: str | None = None, until_date: str | None = None) -> dict:
-    if not await ctx.repo.get_memory(ctx.user.id, int(memory_id)):
-        raise ToolError(f"запись памяти {memory_id} не найдена")
+    if not await ctx.repo.get_memory(ctx.user.id, int(number)):
+        raise ToolError(f"факта №{number} нет в памяти")
     fields: dict[str, Any] = {}
     if content and content.strip():
         fields["content"] = content.strip()
@@ -312,15 +312,15 @@ async def update_memory(ctx: ToolContext, memory_id: int, content: str | None = 
         fields["kind"] = _check_kind(kind)
     if until_day or until_date:
         fields["expires_at"] = _resolve_until(ctx, until_day, until_date)
-    memory = await ctx.repo.update_memory(ctx.user.id, int(memory_id), **fields)
+    memory = await ctx.repo.update_memory(ctx.user.id, int(number), **fields)
     ctx.remembered.append(memory)
     return {"updated": memory_view(memory, ctx.user.timezone)}
 
 
-async def forget(ctx: ToolContext, memory_id: int) -> dict:
-    memory = await ctx.repo.delete_memory(ctx.user.id, int(memory_id))
+async def forget(ctx: ToolContext, number: int) -> dict:
+    memory = await ctx.repo.delete_memory(ctx.user.id, int(number))
     if not memory:
-        raise ToolError(f"запись памяти {memory_id} не найдена")
+        raise ToolError(f"факта №{number} нет в памяти")
     return {"forgotten": memory.content}
 
 
@@ -350,7 +350,7 @@ _RRULE = {
                    "Только для повторяющихся дел.",
 }
 _ID = {"type": "integer", "description": "id задачи"}
-_MEMORY_ID = {"type": "integer", "description": "id записи памяти"}
+_MEMORY_NUMBER = {"type": "integer", "description": "номер факта в памяти (поле number)"}
 _KIND = {
     "type": "string",
     "enum": [k.value for k in MemoryKind],
@@ -468,20 +468,20 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
             {
                 "type": "object",
                 "properties": {
-                    "memory_id": _MEMORY_ID,
+                    "number": _MEMORY_NUMBER,
                     "content": {"type": "string", "description": "Новая формулировка факта"},
                     "kind": _KIND,
                     "until_day": _UNTIL_DAY,
                     "until_date": _UNTIL_DATE,
                 },
-                "required": ["memory_id"],
+                "required": ["number"],
             },
         ),
         update_memory,
     ),
     "forget": (
         ToolSpec("forget", "Удалить факт из памяти, если пользователь просит забыть или он больше не верен.",
-                 {"type": "object", "properties": {"memory_id": _MEMORY_ID}, "required": ["memory_id"]}),
+                 {"type": "object", "properties": {"number": _MEMORY_NUMBER}, "required": ["number"]}),
         forget,
     ),
 }

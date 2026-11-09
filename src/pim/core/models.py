@@ -48,6 +48,8 @@ class User(Base):
     last_digest_on: Mapped[str | None] = mapped_column(String(10))
     # Реплики раньше этого момента не попадают в контекст диалога (/reset)
     context_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Последний выданный номер факта в памяти (у каждого пользователя своя нумерация)
+    memory_seq: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
@@ -70,6 +72,8 @@ class Memory(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # Номер факта у этого пользователя: так он виден в /memory и так его удаляют («удали факт 3»)
+    number: Mapped[int | None] = mapped_column(index=True)
     kind: Mapped[MemoryKind] = mapped_column(String(16), default=MemoryKind.FACT)
     content: Mapped[str] = mapped_column(Text)
     source: Mapped[MemorySource] = mapped_column(String(16), default=MemorySource.EXPLICIT)

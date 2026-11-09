@@ -1,7 +1,10 @@
 import asyncio
 from datetime import timedelta
 
+import pytest
+
 from pim.agent.agent import Agent, History
+from pim.agent.commands import parse_delete_facts
 from pim.agent.tools import ToolContext, run_tool
 from pim.core.models import MemoryKind, utcnow
 from pim.core.timeutils import to_local
@@ -15,14 +18,14 @@ from tests.test_agent import ScriptedLLM
 async def test_remember_update_forget(repo, user):
     ctx = ToolContext(repo, user, user_text="запомни")
     res = await run_tool(ctx, "remember", {"content": "Мама — Ольга, ДР 12 марта", "kind": "person"})
-    mid = res["remembered"]["id"]
+    mid = res["remembered"]["number"]
     assert [m.content for m in ctx.remembered] == ["Мама — Ольга, ДР 12 марта"]
 
-    await run_tool(ctx, "update_memory", {"memory_id": mid, "content": "Мама — Ольга Петровна, ДР 12 марта"})
+    await run_tool(ctx, "update_memory", {"number": mid, "content": "Мама — Ольга Петровна, ДР 12 марта"})
     [m] = await repo.list_memories(user.id)
     assert m.content == "Мама — Ольга Петровна, ДР 12 марта" and m.kind == MemoryKind.PERSON
 
-    assert (await run_tool(ctx, "forget", {"memory_id": mid}))["forgotten"].startswith("Мама")
+    assert (await run_tool(ctx, "forget", {"number": mid}))["forgotten"].startswith("Мама")
     assert await repo.list_memories(user.id) == []
 
 
@@ -31,8 +34,8 @@ async def test_memory_tool_validation(repo, user):
     assert "error" in await run_tool(ctx, "remember", {"content": "  "})
     assert "error" in await run_tool(ctx, "remember", {"content": "x", "kind": "friend"})
     assert "error" in await run_tool(ctx, "remember", {"content": "x", "until_date": "в пятницу"})
-    assert "error" in await run_tool(ctx, "forget", {"memory_id": 999})
-    assert "error" in await run_tool(ctx, "update_memory", {"memory_id": 999, "content": "y"})
+    assert "error" in await run_tool(ctx, "forget", {"number": 999})
+    assert "error" in await run_tool(ctx, "update_memory", {"number": 999, "content": "y"})
 
 
 async def test_temporary_memory_expires(repo, user):
@@ -48,9 +51,9 @@ async def test_memories_are_isolated_between_users(repo, user):
     other = await repo.get_or_create_user(2, 200, TZ)
     mine = await repo.add_memory(user.id, "мой секрет")
     assert await repo.list_memories(other.id) == []
-    assert await repo.get_memory(other.id, mine.id) is None
-    assert await repo.delete_memory(other.id, mine.id) is None
-    assert "error" in await run_tool(ToolContext(repo, other), "forget", {"memory_id": mine.id})
+    assert await repo.get_memory(other.id, mine.number) is None
+    assert await repo.delete_memory(other.id, mine.number) is None
+    assert "error" in await run_tool(ToolContext(repo, other), "forget", {"number": mine.number})
     assert [m.content for m in await repo.list_memories(user.id)] == ["мой секрет"]
 
 
@@ -90,19 +93,18 @@ async def test_user_messages_are_processed_in_order(repo, user):
 
 def test_memory_list_rendering(user):
     class M:
-        def __init__(self, id, kind, content, expires_at=None):
-            self.id, self.kind, self.content, self.expires_at = id, kind, content, expires_at
+        def __init__(self, number, kind, content, expires_at=None):
+            self.number, self.kind, self.content, self.expires_at = number, kind, content, expires_at
 
-    text, kb = memory_list([
+    text = memory_list([
         M(1, MemoryKind.FACT, "работаю из дома по пт"),
         M(2, MemoryKind.PERSON, "мама <Ольга>"),
-        M(3, MemoryKind.FACT, "в отпуске", utcnow() + timedelta(days=2)),
+        M(5, MemoryKind.FACT, "в отпуске", utcnow() + timedelta(days=2)),
     ], TZ)
     assert text.index("Люди") < text.index("Прочее")
-    assert "мама &lt;Ольга&gt;" in text and "(до " in text
-    assert len(kb.inline_keyboard[0]) == 3
-    empty_text, empty_kb = memory_list([], TZ)
-    assert empty_kb is None and "ничего" in empty_text
+    assert "2. мама &lt;Ольга&gt;" in text and "5. в отпуске" in text and "(до " in text
+    assert "удали факт" in text
+    assert "ничего" in memory_list([], TZ)
 
 
 async def test_remember_requires_explicit_request(repo, user):
@@ -124,3 +126,43 @@ async def test_yes_after_offer_counts_as_request(repo, user):
                                      "remember", {"content": "x"})
     assert "error" in await run_tool(ToolContext(repo, user, user_text="нет, не надо", prev_assistant=offer),
                                      "remember", {"content": "x"})
+
+
+async def test_numbers_are_per_user_and_stable(repo, user):
+    other = await repo.get_or_create_user(2, 200, TZ)
+    a = await repo.add_memory(user.id, "a")
+    b = await repo.add_memory(user.id, "b")
+    x = await repo.add_memory(other.id, "x")
+    assert (a.number, b.number, x.number) == (1, 2, 1)
+    await repo.delete_memory(user.id, 1)
+    c = await repo.add_memory(user.id, "c")
+    assert c.number == 3  # номер удалённого не переиспользуется
+    assert [m.number for m in await repo.list_memories(user.id)] == [2, 3]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("удали факт 3", [3]),
+    ("Удали факт №3.", [3]),
+    ("удали факты 3, 5 и 7", [3, 5, 7]),
+    ("забудь факт 2", [2]),
+    ("удалить факт #4", [4]),
+    ("удали факт про маму", None),
+    ("удали задачу 3", None),
+    ("напомни удалить факт 3 из презентации", None),
+])
+def test_parse_delete_facts(text, expected):
+    assert parse_delete_facts(text) == expected
+
+
+async def test_delete_facts_command_skips_llm(repo, user):
+    await repo.add_memory(user.id, "мама — Ольга")
+    await repo.add_memory(user.id, "в отпуске")
+
+    class NoLLM:
+        async def chat(self, messages, tools):
+            raise AssertionError("удаление по номеру не должно ходить в LLM")
+
+    agent = Agent(NoLLM(), repo, History(repo, 10))
+    reply = await agent.handle(user, "удали факты 2 и 9")
+    assert reply.text == "🗑 Забыл факт 2: в отпуске\nФакта 9 нет в памяти"
+    assert [m.content for m in await repo.list_memories(user.id)] == ["мама — Ольга"]
