@@ -18,7 +18,8 @@ async def main() -> None:
     await init_db(engine)
     repo = Repository(make_sessionmaker(engine))
 
-    agent = Agent(make_provider(settings), repo, History(settings.history_size))
+    history = History(settings.history_size, ttl_seconds=settings.history_ttl_minutes * 60)
+    agent = Agent(make_provider(settings), repo, history)
     bot = make_bot(settings)
     dp = make_dispatcher(agent, repo, settings)
     scheduler = ReminderScheduler(repo, TelegramNotifier(bot), settings.reminder_poll_seconds)

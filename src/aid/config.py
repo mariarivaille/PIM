@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     default_timezone: str = "Europe/Moscow"
     reminder_poll_seconds: int = 30
     history_size: int = 10
+    # После такой паузы история диалога забывается
+    history_ttl_minutes: int = 60
     log_level: str = "INFO"
 
     @field_validator("allowed_user_ids", mode="before")

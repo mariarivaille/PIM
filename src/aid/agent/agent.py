@@ -1,7 +1,9 @@
 import json
 import logging
+import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from typing import Callable
 
 from aid.agent.prompts import build_system_prompt
 from aid.agent.tools import TOOLS, ToolContext, run_tool, task_view
@@ -24,20 +26,31 @@ class AgentReply:
 class History:
     """Короткая память диалога в процессе (только текст user/assistant).
 
+    Протухает: если пользователь молчал дольше ttl, следующий разговор начинается с чистого листа,
+    чтобы старый контекст не путал модель.
+
     TODO: вынести в БД, когда понадобится переживать рестарты / несколько инстансов.
     """
 
-    def __init__(self, size: int):
+    def __init__(self, size: int, ttl_seconds: float = 3600, clock: Callable[[], float] = time.monotonic):
         self._data: dict[int, deque[Message]] = defaultdict(lambda: deque(maxlen=size))
+        self._last: dict[int, float] = {}
+        self._ttl = ttl_seconds
+        self._clock = clock
 
     def get(self, user_id: int) -> list[Message]:
+        last = self._last.get(user_id)
+        if last is not None and self._clock() - last > self._ttl:
+            self.clear(user_id)
         return list(self._data[user_id])
 
     def add(self, user_id: int, *messages: Message) -> None:
         self._data[user_id].extend(messages)
+        self._last[user_id] = self._clock()
 
     def clear(self, user_id: int) -> None:
         self._data.pop(user_id, None)
+        self._last.pop(user_id, None)
 
 
 class Agent:

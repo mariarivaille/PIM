@@ -39,6 +39,19 @@ async def test_agent_creates_task_via_tool(repo, user):
     assert [m.role for m in agent.history.get(user.id)] == ["user", "assistant"]
 
 
+def test_history_expires_after_ttl():
+    now = [0.0]
+    h = History(10, ttl_seconds=60, clock=lambda: now[0])
+    h.add(1, Message("user", "a"), Message("assistant", "b"))
+    now[0] = 59
+    assert len(h.get(1)) == 2
+    h.add(1, Message("user", "c"))  # активность продлевает жизнь истории
+    now[0] = 59 + 61
+    assert h.get(1) == []
+    h.add(1, Message("user", "d"))
+    assert [m.content for m in h.get(1)] == ["d"]
+
+
 async def test_tool_errors_are_returned_to_model(repo, user):
     ctx = ToolContext(repo, user)
     assert "error" in await run_tool(ctx, "create_task", {"title": "x", "due_at": "завтра"})
