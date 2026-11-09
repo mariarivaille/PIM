@@ -4,8 +4,8 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from pim.core.models import Memory, MemoryKind, Task
-from pim.core.timeutils import WEEKDAYS_RU, format_local, to_local
+from pim.core.models import Memory, MemoryKind, Task, TaskStatus, utcnow
+from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, to_local
 from pim.reminders.digest import Digest
 
 # Лимит Telegram 4096 символов, оставляем запас на разметку
@@ -70,14 +70,17 @@ def memory_list(memories: list[Memory], tz: str) -> tuple[str, InlineKeyboardMar
 SNOOZE_OPTIONS = [(15, "+15 мин"), (60, "+1 ч"), (24 * 60, "Завтра")]
 
 
-def task_card(task: Task, tz: str) -> str:
+def task_card(task: Task, tz: str, auto_time: bool = False) -> str:
     parts = [f"<b>{html.escape(task.title)}</b>"]
     if task.due_at:
-        parts.append(f"⏰ {format_local(task.due_at, tz)}")
+        until = humanize_until(task.due_at, utcnow(), tz) if task.status == TaskStatus.OPEN else ""
+        parts.append(f"⏰ {format_local(task.due_at, tz)}" + (f" · {until}" if until else ""))
     if task.rrule:
         parts.append(f"🔁 {html.escape(task.rrule)}")
     if task.notes:
         parts.append(html.escape(task.notes))
+    if auto_time and task.due_at:
+        parts.append("<i>Время выбрал сам — если нужно другое, скажи, например «перенеси на 15:00».</i>")
     return "\n".join(parts)
 
 

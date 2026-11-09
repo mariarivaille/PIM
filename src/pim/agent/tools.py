@@ -15,7 +15,16 @@ from dateutil.rrule import rrulestr
 
 from pim.core.models import Memory, MemoryKind, MemorySource, Task, User, utcnow
 from pim.core.repository import Repository
-from pim.core.timeutils import DAY_KEYWORDS, DEFAULT_TIME, format_local, parse_local, resolve_day_time, to_local
+from pim.core.timeutils import (
+    DAY_KEYWORDS,
+    DEFAULT_TIME,
+    format_local,
+    humanize_until,
+    nearest_reasonable_time,
+    parse_local,
+    resolve_day_time,
+    to_local,
+)
 from pim.llm.base import ToolSpec
 from pim.reminders.digest import parse_hhmm
 
@@ -32,6 +41,10 @@ class ToolContext:
     touched: list[Task] = field(default_factory=list)
     # записи памяти, созданные/исправленные за ход — телеграм-слой покажет «📌 Запомнил» с кнопкой «Забыть»
     remembered: list[Memory] = field(default_factory=list)
+    # id задач, время которых выбрал бот, а не пользователь — в карточке будет «время выбрал сам»
+    auto_time: set[int] = field(default_factory=set)
+    # уже просили модель выбрать время за этот ход — второй раз не просим, ставим запасное
+    asked_for_time: bool = False
     # текст сообщения пользователя и предыдущий ответ бота: по ним проверяем, просил ли он что-то запомнить
     user_text: str = ""
     prev_assistant: str = ""
@@ -69,35 +82,56 @@ def task_view(task: Task, tz: str) -> dict[str, Any]:
     }
 
 
-def _parse_due(ctx: ToolContext, value: str | None):
-    if not value:
-        return None
+def _parse_due(ctx: ToolContext, value: str) -> tuple[datetime, bool]:
+    """ISO-время от модели -> (UTC, время подставлено кодом)."""
     try:
         local = datetime.fromisoformat(value)
     except ValueError as e:
         raise ToolError(f"due_at должен быть ISO 8601, например 2026-10-30T15:00, получено {value!r}") from e
-    # Только дата или ровно полночь — модель не знала время: ставим как «просто день», а не будим в 00:00
-    if "T" not in value or (local.hour, local.minute, local.second) == (0, 0, 0):
+    # Только дата или ровно полночь — модель не выбрала время: ставим как «просто день», а не будим в 00:00
+    defaulted = "T" not in value or (local.hour, local.minute, local.second) == (0, 0, 0)
+    if defaulted:
         local = local.replace(hour=DEFAULT_TIME.hour, minute=DEFAULT_TIME.minute, second=0)
-    return parse_local(local.isoformat(), ctx.user.timezone)
+    return parse_local(local.isoformat(), ctx.user.timezone), defaulted
 
 
 def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: str | None,
-                 in_minutes: int | None) -> datetime | None:
-    """Время напоминания из того, что дала модель. Даты считает код, а не LLM."""
+                 in_minutes: int | None, time_guessed: bool = False) -> tuple[datetime | None, bool]:
+    """Время напоминания из того, что дала модель. Даты считает код, а не LLM.
+
+    Возвращает (время, выбрано ли оно без пользователя) — во втором случае бот должен об этом сказать.
+    """
+    now = utcnow()
     if in_minutes:
-        return utcnow() + timedelta(minutes=int(in_minutes))
+        return now + timedelta(minutes=int(in_minutes)), False
     if due_at:
-        return _parse_due(ctx, due_at)
-    if not day and not time:
-        return None
-    if day and day not in DAY_KEYWORDS:
-        raise ToolError(f"day должен быть одним из {DAY_KEYWORDS}, получено {day!r}")
-    try:
-        at = parse_hhmm(time) if time else None
-    except ValueError as e:
-        raise ToolError(f"time нужно в формате HH:MM, получено {time!r}") from e
-    return resolve_day_time(utcnow(), ctx.user.timezone, day, at)
+        due, defaulted = _parse_due(ctx, due_at)
+        auto = defaulted or bool(time_guessed)
+    elif day or time:
+        if day and day not in DAY_KEYWORDS:
+            raise ToolError(f"day должен быть одним из {DAY_KEYWORDS}, получено {day!r}")
+        try:
+            at = parse_hhmm(time) if time else None
+        except ValueError as e:
+            raise ToolError(f"time нужно в формате HH:MM, получено {time!r}") from e
+        due = resolve_day_time(now, ctx.user.timezone, day, at)
+        auto = at is None or bool(time_guessed)
+    else:
+        return None, False
+    # Время, выбранное не пользователем, не должно оказаться в прошлом: иначе напоминание придёт сразу
+    if auto and due <= now:
+        due = nearest_reasonable_time(now, ctx.user.timezone)
+    return due, auto
+
+
+def _due_view(ctx: ToolContext, task: Task, auto: bool) -> dict[str, Any]:
+    view = task_view(task, ctx.user.timezone)
+    if task.due_at:
+        view["in"] = humanize_until(task.due_at, utcnow(), ctx.user.timezone)
+    if auto:
+        view["time_chosen_by_assistant"] = True
+        ctx.auto_time.add(task.id)
+    return view
 
 
 def _check_rrule(value: str | None) -> str | None:
@@ -123,14 +157,23 @@ async def _get(ctx: ToolContext, task_id: int) -> Task:
 
 async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, day: str | None = None,
                       time: str | None = None, in_minutes: int | None = None, rrule: str | None = None,
-                      notes: str | None = None) -> dict:
+                      notes: str | None = None, time_guessed: bool = False) -> dict:
     rrule = _check_rrule(rrule)
-    due = _resolve_due(ctx, due_at, day, time, in_minutes)
+    date_only_due = bool(due_at) and ("T" not in due_at or due_at.split("T", 1)[1].startswith("00:00"))
+    if ((day and not time) or date_only_due) and not ctx.asked_for_time:
+        # Модели ленятся выбирать время сами — один раз просим подумать, потом сработает запасное время кода
+        ctx.asked_for_time = True
+        raise ToolError(
+            "время не указано. Выбери подходящее сам по смыслу дела и памяти о пользователе (звонки и организации — "
+            "рабочее время, покупки и быт — вечер после работы, личное — с учётом распорядка, не ночью) "
+            "и вызови create_task ещё раз с time и time_guessed=true"
+        )
+    due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
     task = await ctx.repo.create_task(ctx.user.id, title=title, due_at=due, rrule=rrule, notes=notes)
     ctx.touched.append(task)
-    return {"created": task_view(task, ctx.user.timezone)}
+    return {"created": _due_view(ctx, task, auto)}
 
 
 async def list_tasks(ctx: ToolContext) -> dict:
@@ -140,9 +183,10 @@ async def list_tasks(ctx: ToolContext) -> dict:
 
 async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, due_at: str | None = None,
                       day: str | None = None, time: str | None = None, in_minutes: int | None = None,
-                      rrule: str | None = None, notes: str | None = None) -> dict:
+                      rrule: str | None = None, notes: str | None = None, time_guessed: bool = False) -> dict:
     task = await _get(ctx, task_id)
     fields: dict[str, Any] = {}
+    auto = False
     if title:
         fields["title"] = title
     if time and not (day or due_at or in_minutes) and task.due_at:
@@ -153,15 +197,17 @@ async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, 
         except ValueError as e:
             raise ToolError(f"time нужно в формате HH:MM, получено {time!r}") from e
         fields["due_at"] = local.replace(hour=at.hour, minute=at.minute).astimezone(dt_timezone.utc)
-    elif due := _resolve_due(ctx, due_at, day, time, in_minutes):
-        fields["due_at"] = due
+    else:
+        due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
+        if due:
+            fields["due_at"] = due
     if rrule is not None:
         fields["rrule"] = _check_rrule(rrule)
     if notes is not None:
         fields["notes"] = notes or None
     task = await ctx.repo.update_task(ctx.user.id, int(task_id), **fields)
     ctx.touched.append(task)
-    return {"updated": task_view(task, ctx.user.timezone)}
+    return {"updated": _due_view(ctx, task, auto)}
 
 
 async def complete_task(ctx: ToolContext, task_id: int) -> dict:
@@ -293,6 +339,10 @@ _DAY = {
                    "(ближайший будущий). Дату по дню недели НЕ вычисляй — передай день сюда.",
 }
 _TIME = {"type": "string", "description": "Время напоминания HH:MM, например 19:00"}
+_TIME_GUESSED = {
+    "type": "boolean",
+    "description": "true, если пользователь НЕ называл время и ты выбрал его сам по смыслу дела",
+}
 _IN_MINUTES = {"type": "integer", "description": "Для «через N минут/часов»: через сколько минут напомнить"}
 _RRULE = {
     "type": "string",
@@ -328,6 +378,7 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "title": {"type": "string", "description": "Короткая формулировка дела в инфинитиве"},
                     "day": _DAY,
                     "time": _TIME,
+                    "time_guessed": _TIME_GUESSED,
                     "in_minutes": _IN_MINUTES,
                     "due_at": _DUE,
                     "rrule": _RRULE,
@@ -354,6 +405,7 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "title": {"type": "string", "description": "Новое название"},
                     "day": _DAY,
                     "time": {**_TIME, "description": "Новое время HH:MM; без day — тот же день, другое время"},
+                    "time_guessed": _TIME_GUESSED,
                     "in_minutes": _IN_MINUTES,
                     "due_at": _DUE,
                     "rrule": {**_RRULE, "description": _RRULE["description"] + " Пустая строка снимает повтор."},

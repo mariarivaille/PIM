@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -45,6 +46,44 @@ def resolve_day_time(now: datetime, tz: str, day: str | None, at: time | None) -
     if day is None and result <= local_now:
         result += timedelta(days=1)
     return result.astimezone(timezone.utc)
+
+
+def plural_ru(n: int, one: str, few: str, many: str) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def humanize_until(due: datetime, now: datetime, tz: str) -> str:
+    """«через 25 мин», «через 2 ч 15 мин», «через 3 дня»; пусто, если момент уже прошёл."""
+    seconds = (due - now).total_seconds()
+    if seconds <= 0:
+        return ""
+    minutes = math.ceil(seconds / 60)
+    if minutes < 60:
+        return f"через {minutes} мин"
+    if minutes < 24 * 60:
+        hours, rest = divmod(minutes, 60)
+        return f"через {hours} ч" + (f" {rest} мин" if rest else "")
+    days = (to_local(due, tz).date() - to_local(now, tz).date()).days
+    return f"через {days} {plural_ru(days, 'день', 'дня', 'дней')}"
+
+
+# Запасное время, если модель не выбрала его сама: не ночью и не в прошлом
+QUIET_FROM, QUIET_TO = 22, 8
+
+
+def nearest_reasonable_time(now: datetime, tz: str) -> datetime:
+    """Через час (с округлением до :00/:30), а если это попадает на ночь — завтра в DEFAULT_TIME."""
+    local = to_local(now, tz) + timedelta(hours=1)
+    bump = (30 - local.minute % 30) % 30
+    local = (local + timedelta(minutes=bump)).replace(second=0, microsecond=0)
+    if local.hour >= QUIET_FROM or local.hour < QUIET_TO:
+        day = local.date() if local.hour < QUIET_TO else local.date() + timedelta(days=1)
+        local = datetime.combine(day, DEFAULT_TIME, tzinfo=ZoneInfo(tz))
+    return local.astimezone(timezone.utc)
 
 
 def next_occurrence(rule: str, prev: datetime, tz: str, after: datetime) -> datetime | None:

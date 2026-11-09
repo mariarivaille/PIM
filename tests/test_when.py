@@ -61,10 +61,54 @@ async def test_update_time_only_keeps_day(repo, user):
 
 
 async def test_due_at_without_time_defaults_to_10(repo, user):
-    ctx = ToolContext(repo, user)
+    ctx = ToolContext(repo, user, asked_for_time=True)  # подсказку модели уже давали — сразу запасное время
     for value in ("2030-03-11", "2030-03-11T00:00:00"):
         await run_tool(ctx, "create_task", {"title": value, "due_at": value})
     explicit = await run_tool(ctx, "create_task", {"title": "x", "due_at": "2030-03-11T18:30"})
     hours = [to_local(t.due_at, TZ).strftime("%H:%M") for t in ctx.touched]
     assert hours == ["10:00", "10:00", "18:30"]
     assert explicit["created"]["due"].endswith("18:30")
+
+
+def test_humanize_until():
+    from pim.core.timeutils import humanize_until
+    now = parse_local("2026-11-10T00:20", TZ)
+    assert humanize_until(now + timedelta(minutes=25), now, TZ) == "через 25 мин"
+    assert humanize_until(now + timedelta(hours=9, minutes=40), now, TZ) == "через 9 ч 40 мин"
+    assert humanize_until(now + timedelta(hours=2), now, TZ) == "через 2 ч"
+    assert humanize_until(parse_local("2026-11-12T10:00", TZ), now, TZ) == "через 2 дня"
+    assert humanize_until(parse_local("2026-11-15T10:00", TZ), now, TZ) == "через 5 дней"
+    assert humanize_until(parse_local("2026-11-11T10:00", TZ) + timedelta(days=20), now, TZ) == "через 21 день"
+    assert humanize_until(now - timedelta(minutes=1), now, TZ) == ""
+
+
+@pytest.mark.parametrize("now_local, expected", [
+    ("2026-11-10T14:10", "2026-11-10T15:30"),  # через час, округление до :00/:30
+    ("2026-11-10T15:00", "2026-11-10T16:00"),
+    ("2026-11-10T21:30", "2026-11-11T10:00"),  # попадает на ночь — завтра утром
+    ("2026-11-10T02:00", "2026-11-10T10:00"),  # глубокая ночь — сегодня утром
+])
+def test_nearest_reasonable_time(now_local, expected):
+    from pim.core.timeutils import nearest_reasonable_time
+    got = nearest_reasonable_time(parse_local(now_local, TZ), TZ)
+    assert to_local(got, TZ).strftime("%Y-%m-%dT%H:%M") == expected
+
+
+async def test_auto_time_is_flagged_and_never_in_past(repo, user, monkeypatch):
+    now = parse_local("2026-11-10T15:00", TZ)
+    monkeypatch.setattr("pim.agent.tools.utcnow", lambda: now)
+    ctx = ToolContext(repo, user)
+    # модель выбрала время сама
+    guessed = await run_tool(ctx, "create_task", {"title": "позвонить в банк", "day": "tomorrow",
+                                                  "time": "11:00", "time_guessed": True})
+    assert guessed["created"]["time_chosen_by_assistant"] and guessed["created"]["in"] == "через 20 ч"
+    # пользователь назвал время — не помечаем
+    named = await run_tool(ctx, "create_task", {"title": "x", "day": "tomorrow", "time": "11:00"})
+    assert "time_chosen_by_assistant" not in named["created"]
+    # «сегодня» без времени: сначала просим модель выбрать время сама
+    nudge = await run_tool(ctx, "create_task", {"title": "купить хлеб", "day": "today"})
+    assert "error" in nudge and "time_guessed=true" in nudge["error"]
+    # модель снова без времени — запасные 10:00 уже прошли, ставим на ближайшее разумное
+    today = await run_tool(ctx, "create_task", {"title": "купить хлеб", "day": "today"})
+    assert today["created"]["time_chosen_by_assistant"] and today["created"]["due"] == "вт 10.11 16:00"
+    assert ctx.auto_time == {ctx.touched[0].id, ctx.touched[2].id}

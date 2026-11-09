@@ -23,6 +23,7 @@ class AgentReply:
     text: str
     touched: list[Task] = field(default_factory=list)
     remembered: list[Memory] = field(default_factory=list)
+    auto_time: set[int] = field(default_factory=set)
 
 
 class History:
@@ -100,4 +101,4 @@ class Agent:
 
         reply = reply.strip() or "Готово."
         await self.history.add(user.id, user_msg, Message("assistant", reply))
-        return AgentReply(text=reply, touched=ctx.touched, remembered=ctx.remembered)
+        return AgentReply(text=reply, touched=ctx.touched, remembered=ctx.remembered, auto_time=ctx.auto_time)

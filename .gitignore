@@ -223,3 +223,8 @@ pim.db
 
 # macOS
 .DS_Store
+
+# SQLite: база и служебные файлы режима WAL
+*.db
+*.db-wal
+*.db-shm

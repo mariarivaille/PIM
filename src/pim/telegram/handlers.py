@@ -125,7 +125,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             seen[t.id] = t
         for t in seen.values():
             if t.status == "open":
-                await message.answer(task_card(t, user.timezone), reply_markup=created_kb(t))
+                await message.answer(task_card(t, user.timezone, auto_time=t.id in reply.auto_time),
+                                     reply_markup=created_kb(t))
         for m in {m.id: m for m in reply.remembered}.values():
             text, kb = memory_card(m, user.timezone)
             await message.answer(text, reply_markup=kb)
