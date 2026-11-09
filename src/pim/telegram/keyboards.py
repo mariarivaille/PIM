@@ -124,6 +124,43 @@ def plan_message(plan: Plan, tz: str) -> tuple[str, InlineKeyboardMarkup | None]
     return _fit(parts), kb.as_markup()
 
 
+def _who(user) -> str:
+    return html.escape(user.name or "Близкий")
+
+
+def assignment_text(task: Task, by, tz: str) -> str:
+    return f"📨 <b>{_who(by)} просит:</b>\n\n{task_card(task, tz)}"
+
+
+def outcome_text(task: Task, assignee) -> str:
+    if task.status == TaskStatus.DONE:
+        return f"✅ {_who(assignee)}: «{html.escape(task.title)}» — сделано"
+    return f"🗑 {_who(assignee)}: «{html.escape(task.title)}» — отменено"
+
+
+def list_additions_text(lst: ItemList, adder, items: list[ListItem]) -> str:
+    what = ", ".join(html.escape(i.text) for i in items)
+    return f"{_list_icon(lst.name)} {_who(adder)} добавляет в «{html.escape(lst.name)}»: {what}"
+
+
+def open_list_kb(lst: ItemList) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Открыть список", callback_data=ListAction(action="open", list_id=lst.id))
+    return kb.as_markup()
+
+
+def people_text(people: list, invite_hint: bool = True) -> str:
+    if not people:
+        return ("Пока ты ни с кем не связан(а) в Pim.\n"
+                "/invite — ссылка-приглашение: близкий откроет её, и вы сможете поручать друг другу дела "
+                "(«напомни Андрею купить хлеб») и вести общие списки («поделись покупками с Андреем»).")
+    lines = ["👥 <b>Близкие в Pim</b>"] + [f"• {html.escape(c.alias)}" for c, _ in people]
+    lines.append("\nМожно поручать дела («напомни Андрею…») и делиться списками («поделись покупками с …»).")
+    if invite_hint:
+        lines.append("Пригласить ещё — /invite")
+    return "\n".join(lines)
+
+
 class ListAction(CallbackData, prefix="l"):
     action: str  # toggle | clear | open
     list_id: int
@@ -141,10 +178,10 @@ def _list_icon(name: str) -> str:
     return next((icon for keys, icon in LIST_ICONS if any(n.startswith(k) or f" {k}" in f" {n}" for k in keys)), "📋")
 
 
-def list_card(lst: ItemList, items: list[ListItem]) -> tuple[str, InlineKeyboardMarkup]:
+def list_card(lst: ItemList, items: list[ListItem], shared: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     """Список как сообщение с чекбоксами: нажатие на пункт отмечает его, «🧹» убирает отмеченные."""
     done = sum(i.done for i in items)
-    title = f"{_list_icon(lst.name)} <b>{html.escape(lst.name)}</b>"
+    title = f"{_list_icon(lst.name)} <b>{html.escape(lst.name)}</b>" + (" 👥" if shared else "")
     if not items:
         text = f"{title}\nПусто — скажи, например: «добавь в {html.escape(lst.name.lower())} …»"
     else:
@@ -162,13 +199,13 @@ def list_card(lst: ItemList, items: list[ListItem]) -> tuple[str, InlineKeyboard
     return text, kb.as_markup()
 
 
-def lists_menu(lists: list[tuple[ItemList, int, int]]) -> tuple[str, InlineKeyboardMarkup | None]:
+def lists_menu(lists: list[tuple[ItemList, int, int]], shared: set[int] = frozenset()) -> tuple[str, InlineKeyboardMarkup | None]:
     if not lists:
         return ("Списков пока нет. Скажи, например: «добавь в покупки молоко и хлеб» или "
                 "«в поездку взять зарядку и паспорт» — список создастся сам.", None)
     kb = InlineKeyboardBuilder()
     for lst, open_, _ in lists:
-        kb.button(text=f"{_list_icon(lst.name)} {lst.name} ({open_})",
+        kb.button(text=f"{_list_icon(lst.name)} {lst.name} ({open_})" + (" 👥" if lst.id in shared else ""),
                   callback_data=ListAction(action="open", list_id=lst.id))
     kb.adjust(1)
     return "Твои списки (в скобках — сколько не отмечено):", kb.as_markup()

@@ -1,14 +1,19 @@
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from pim.core.models import (
     ChatMessage,
     DateAlert,
     DayPlan,
+    Connection,
+    Invite,
     ItemList,
     ListItem,
+    ListMember,
     Memory,
     MemoryKind,
     MemorySource,
@@ -21,6 +26,9 @@ from pim.core.models import (
 )
 from pim.core.timeutils import next_occurrence
 from pim.core.yearly import parse_yearly_date
+
+
+INVITE_TTL = timedelta(days=7)
 
 
 def _apply_yearly_date(memory: Memory) -> bool:
@@ -40,14 +48,18 @@ class Repository:
 
     # --- users ---
 
-    async def get_or_create_user(self, user_id: int, chat_id: int, default_tz: str) -> User:
+    async def get_or_create_user(self, user_id: int, chat_id: int, default_tz: str,
+                                 name: str | None = None) -> User:
         async with self._sm() as s, s.begin():
             user = await s.get(User, user_id)
             if user is None:
-                user = User(id=user_id, chat_id=chat_id, timezone=default_tz)
+                user = User(id=user_id, chat_id=chat_id, timezone=default_tz, name=name)
                 s.add(user)
-            elif user.chat_id != chat_id:
-                user.chat_id = chat_id
+            else:
+                if user.chat_id != chat_id:
+                    user.chat_id = chat_id
+                if name and user.name != name:
+                    user.name = name
             return user
 
     async def get_user(self, user_id: int) -> User | None:
@@ -226,8 +238,14 @@ class Repository:
 
     # --- списки ---
 
+    @staticmethod
+    def _accessible(user_id: int):
+        """Условие «список доступен пользователю»: он владелец или участник общего списка."""
+        return or_(ItemList.user_id == user_id,
+                   ItemList.id.in_(select(ListMember.list_id).where(ListMember.user_id == user_id)))
+
     async def user_lists(self, user_id: int) -> list[tuple[ItemList, int, int]]:
-        """Списки пользователя с числом открытых и всех пунктов."""
+        """Свои и общие списки с числом открытых и всех пунктов; свои — первыми."""
         async with self._sm() as s:
             res = await s.execute(
                 select(
@@ -236,16 +254,44 @@ class Repository:
                     func.count(ListItem.id),
                 )
                 .outerjoin(ListItem, ListItem.list_id == ItemList.id)
-                .where(ItemList.user_id == user_id)
+                .where(self._accessible(user_id))
                 .group_by(ItemList.id)
-                .order_by(ItemList.id)
+                .order_by(ItemList.user_id != user_id, ItemList.id)
             )
             return [(lst, open_, total) for lst, open_, total in res.all()]
 
     async def get_list(self, user_id: int, list_id: int) -> ItemList | None:
         async with self._sm() as s:
+            return await s.scalar(select(ItemList).where(ItemList.id == list_id, self._accessible(user_id)))
+
+    async def list_participants(self, list_id: int) -> list[int]:
+        """Владелец и участники списка."""
+        async with self._sm() as s:
             lst = await s.get(ItemList, list_id)
-            return lst if lst and lst.user_id == user_id else None
+            if lst is None:
+                return []
+            members = await s.scalars(select(ListMember.user_id).where(ListMember.list_id == list_id))
+            return [lst.user_id, *members]
+
+    async def shared_list_ids(self, user_id: int) -> set[int]:
+        """Какие из доступных пользователю списков общие (есть кто-то кроме владельца)."""
+        async with self._sm() as s:
+            return set(await s.scalars(
+                select(ListMember.list_id).join(ItemList, ItemList.id == ListMember.list_id)
+                .where(self._accessible(user_id))
+            ))
+
+    async def add_list_member(self, list_id: int, user_id: int) -> bool:
+        """False — уже участник. Уже лежащие пункты помечаются «сообщёнными», чтобы не прилетели новичку пачкой."""
+        async with self._sm() as s, s.begin():
+            exists = await s.scalar(select(func.count()).select_from(ListMember).where(
+                ListMember.list_id == list_id, ListMember.user_id == user_id))
+            if exists:
+                return False
+            s.add(ListMember(list_id=list_id, user_id=user_id))
+            for item in await s.scalars(select(ListItem).where(ListItem.list_id == list_id)):
+                item.notified = True
+            return True
 
     async def create_list(self, user_id: int, name: str) -> ItemList:
         async with self._sm() as s, s.begin():
@@ -254,11 +300,13 @@ class Repository:
         return lst
 
     async def delete_list(self, user_id: int, list_id: int) -> ItemList | None:
+        """Удалить может только владелец (участник общего списка — нет)."""
         async with self._sm() as s, s.begin():
             lst = await s.get(ItemList, list_id)
             if not lst or lst.user_id != user_id:
                 return None
             await s.execute(delete(ListItem).where(ListItem.list_id == list_id))
+            await s.execute(delete(ListMember).where(ListMember.list_id == list_id))
             await s.delete(lst)
             return lst
 
@@ -270,9 +318,9 @@ class Repository:
             )
             return list(res)
 
-    async def add_items(self, list_id: int, texts: list[str]) -> list[ListItem]:
+    async def add_items(self, list_id: int, texts: list[str], added_by: int | None = None) -> list[ListItem]:
         async with self._sm() as s, s.begin():
-            items = [ListItem(list_id=list_id, text=t) for t in texts]
+            items = [ListItem(list_id=list_id, text=t, added_by=added_by) for t in texts]
             s.add_all(items)
         return items
 
@@ -287,8 +335,9 @@ class Repository:
         """Отметить/снять отметку (кнопка в Telegram). Возвращает список, если пункт принадлежит пользователю."""
         async with self._sm() as s, s.begin():
             item = await s.get(ListItem, item_id)
-            lst = await s.get(ItemList, item.list_id) if item else None
-            if not lst or lst.user_id != user_id:
+            lst = await s.scalar(select(ItemList).where(ItemList.id == item.list_id, self._accessible(user_id))) \
+                if item else None
+            if not lst:
                 return None
             item.done = not item.done
             item.done_at = utcnow() if item.done else None
@@ -302,6 +351,100 @@ class Repository:
         async with self._sm() as s, s.begin():
             res = await s.execute(delete(ListItem).where(ListItem.list_id == list_id, ListItem.done.is_(True)))
             return res.rowcount
+
+    # --- близкие: приглашения, связи, поручения ---
+
+    async def create_invite(self, user_id: int) -> str:
+        code = secrets.token_urlsafe(9)
+        async with self._sm() as s, s.begin():
+            s.add(Invite(code=code, user_id=user_id))
+        return code
+
+    async def valid_invite(self, code: str, now: datetime | None = None) -> Invite | None:
+        async with self._sm() as s:
+            invite = await s.scalar(select(Invite).where(Invite.code == code))
+            if invite is None or invite.used_by is not None:
+                return None
+            if (now or utcnow()) - invite.created_at > INVITE_TTL:
+                return None
+            return invite
+
+    async def accept_invite(self, code: str, user_id: int) -> int | None:
+        """Связать пригласившего и нового пользователя. Возвращает id пригласившего или None."""
+        invite = await self.valid_invite(code)
+        if invite is None or invite.user_id == user_id:
+            return None
+        async with self._sm() as s, s.begin():
+            inv = await s.get(Invite, invite.id)
+            inv.used_by, inv.used_at = user_id, utcnow()
+            inviter, joined = await s.get(User, invite.user_id), await s.get(User, user_id)
+            for a, b in ((inviter, joined), (joined, inviter)):
+                exists = await s.scalar(select(func.count()).select_from(Connection).where(
+                    Connection.user_id == a.id, Connection.peer_id == b.id))
+                if not exists:
+                    s.add(Connection(user_id=a.id, peer_id=b.id, alias=b.name or "без имени"))
+        return invite.user_id
+
+    async def connections(self, user_id: int) -> list[tuple[Connection, User]]:
+        async with self._sm() as s:
+            res = await s.execute(
+                select(Connection, User).join(User, User.id == Connection.peer_id)
+                .where(Connection.user_id == user_id).order_by(Connection.id)
+            )
+            return [(c, u) for c, u in res.all()]
+
+    async def create_assigned_task(self, assignee_id: int, assigned_by: int, title: str,
+                                   due_at: datetime | None = None, notes: str | None = None) -> Task:
+        async with self._sm() as s, s.begin():
+            task = Task(user_id=assignee_id, assigned_by=assigned_by, title=title, due_at=due_at, notes=notes)
+            s.add(task)
+        return task
+
+    async def pending_assignments(self) -> list[tuple[Task, User, User]]:
+        """Поручения, о которых исполнитель ещё не знает: (дело, исполнитель, поручивший)."""
+        async with self._sm() as s:
+            by = aliased(User)
+            res = await s.execute(
+                select(Task, User, by).join(User, User.id == Task.user_id).join(by, by.id == Task.assigned_by)
+                .where(Task.assigned_by.is_not(None), Task.assign_notified_at.is_(None))
+            )
+            return [tuple(r) for r in res.all()]
+
+    async def pending_outcomes(self) -> list[tuple[Task, User, User]]:
+        """Поручения, которые исполнитель сделал или удалил, а поручивший ещё не знает."""
+        async with self._sm() as s:
+            by = aliased(User)
+            res = await s.execute(
+                select(Task, User, by).join(User, User.id == Task.user_id).join(by, by.id == Task.assigned_by)
+                .where(Task.assigned_by.is_not(None), Task.outcome_notified_at.is_(None),
+                       Task.status.in_([TaskStatus.DONE, TaskStatus.CANCELLED]))
+            )
+            return [tuple(r) for r in res.all()]
+
+    async def mark_task_notified(self, task_id: int, field: str) -> None:
+        async with self._sm() as s, s.begin():
+            task = await s.get(Task, task_id)
+            if task:
+                setattr(task, field, utcnow())
+
+    async def pending_list_additions(self) -> list[tuple[ItemList, int, list[ListItem]]]:
+        """Новые пункты общих списков, о которых остальные участники ещё не знают: (список, кто добавил, пункты)."""
+        async with self._sm() as s:
+            res = await s.execute(
+                select(ListItem, ItemList).join(ItemList, ItemList.id == ListItem.list_id)
+                .where(ListItem.notified.is_(False), ListItem.added_by.is_not(None),
+                       ItemList.id.in_(select(ListMember.list_id)))
+                .order_by(ListItem.id)
+            )
+            groups: dict[tuple[int, int], tuple[ItemList, list[ListItem]]] = {}
+            for item, lst in res.all():
+                groups.setdefault((lst.id, item.added_by), (lst, []))[1].append(item)
+            return [(lst, added_by, items) for (_, added_by), (lst, items) in groups.items()]
+
+    async def mark_items_notified(self, item_ids: list[int]) -> None:
+        async with self._sm() as s, s.begin():
+            for item in await s.scalars(select(ListItem).where(ListItem.id.in_(item_ids))):
+                item.notified = True
 
     # --- план дня ---
 

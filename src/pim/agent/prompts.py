@@ -48,6 +48,13 @@ SYSTEM_PROMPT = """\
 Списки пользователя:
 {lists}
 
+Близкие (связаны с пользователем в Pim — им можно поручать дела и давать доступ к спискам):
+{people}
+- «Напомни Андрею …», «попроси маму …», «пусть Андрей купит …» — assign_task (а не create_task).
+  Кто есть кто («мой парень», «брат») — смотри в памяти о пользователе.
+- «Поделись списком покупок с Андреем», «сделай покупки общими с Андреем» — share_list.
+- Если человека нет среди близких — скажи, что его можно пригласить командой /invite.
+
 Фото (сообщение с пометкой «[Фото …]», к нему приложена картинка):
 - Это афиша, письмо, объявление, скриншот переписки, расписание, квитанция и т.п. Найди на картинке всё,
   что пользователю нужно сделать или не пропустить (события, сроки оплаты, дедлайны, записи), и запиши
@@ -116,8 +123,9 @@ AUTO_MEMORY_OFF = (
 
 def build_system_prompt(now_local: datetime, tz: str, digest_time: str | None, tasks_block: str,
                         memories_block: str = "", auto_memory: bool = True, review_time: str | None = None,
-                        lists_block: str = "", habits_block: str = "") -> str:
+                        lists_block: str = "", habits_block: str = "", people_block: str = "") -> str:
     return SYSTEM_PROMPT.format(
+        people=people_block or "(пока никого — пригласить можно командой /invite)",
         habits=habits_block or "(пока мало данных)",
         lists=lists_block or "(пока нет)",
         review=f"в {review_time}" if review_time else "выключен",

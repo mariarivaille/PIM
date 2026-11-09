@@ -41,6 +41,8 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # telegram user id
     chat_id: Mapped[int] = mapped_column(BigInteger)
+    # Имя из Telegram — так пользователя видят близкие («Мария просит…»)
+    name: Mapped[str | None] = mapped_column(String(200))
     timezone: Mapped[str] = mapped_column(String(64))
     # Локальное время утренней сводки "HH:MM"; None = сводка выключена
     digest_time: Mapped[str | None] = mapped_column(String(5), default="09:00", server_default="09:00")
@@ -123,6 +125,10 @@ class Task(Base):
     reminded_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Поручение от близкого: кто поручил; когда исполнителю сообщили; когда поручителю сообщили об итоге
+    assigned_by: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    assign_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    outcome_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class ItemList(Base):
@@ -146,6 +152,9 @@ class ListItem(Base):
     list_id: Mapped[int] = mapped_column(ForeignKey("lists.id", ondelete="CASCADE"), index=True)
     text: Mapped[str] = mapped_column(String(200))
     done: Mapped[bool] = mapped_column(default=False, server_default="0")
+    # кто добавил и сообщили ли об этом остальным участникам общего списка
+    added_by: Mapped[int | None] = mapped_column(BigInteger)
+    notified: Mapped[bool] = mapped_column(default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     done_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
@@ -195,3 +204,43 @@ class DayPlan(Base):
     items: Mapped[str] = mapped_column(Text)  # JSON: [{"task_id", "at" (ISO UTC), "minutes"}]
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class Connection(Base):
+    """Близкие: с кем пользователь связан приглашением — им можно поручать дела и давать доступ к спискам.
+
+    Хранится в обе стороны: (A, B) и (B, A); alias — как A называет B.
+    """
+
+    __tablename__ = "connections"
+    __table_args__ = (UniqueConstraint("user_id", "peer_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    peer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    alias: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class Invite(Base):
+    """Одноразовое приглашение: t.me/<bot>?start=join_<code>."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    used_by: Mapped[int | None] = mapped_column(BigInteger)
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class ListMember(Base):
+    """Участник общего списка (кроме владельца)."""
+
+    __tablename__ = "list_members"
+    __table_args__ = (UniqueConstraint("list_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    list_id: Mapped[int] = mapped_column(ForeignKey("lists.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)

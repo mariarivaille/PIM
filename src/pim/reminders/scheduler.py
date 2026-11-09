@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from pim.core.models import Task, User, utcnow
+from pim.core.models import ItemList, ListItem, Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
 from pim.learning.timing import TimeProfile, load_profile
@@ -27,6 +27,12 @@ class Notifier(Protocol):
     async def send_review(self, user: User, review: Review) -> None: ...
 
     async def send_date_alert(self, user: User, upcoming: UpcomingDate) -> None: ...
+
+    async def send_assignment(self, assignee: User, task: Task, by: User) -> None: ...
+
+    async def send_outcome(self, by: User, task: Task, assignee: User) -> None: ...
+
+    async def send_list_additions(self, recipient: User, lst: ItemList, adder: User, items: list[ListItem]) -> None: ...
 
 
 class ReminderScheduler:
@@ -114,6 +120,39 @@ class ReminderScheduler:
             await self._repo.mark_dates_checked(user.id, to_local(now, user.timezone).date().isoformat())
         return sent
 
+    async def tick_shared(self) -> int:
+        """Поручения близким и общие списки: кому что сообщить. Флаги в БД — ничего не теряется при рестарте."""
+        sent = 0
+        for task, assignee, by in await self._repo.pending_assignments():
+            try:
+                await self._notifier.send_assignment(assignee, task, by)
+            except Exception:
+                log.exception("failed to send assignment %s", task.id)
+                continue
+            await self._repo.mark_task_notified(task.id, "assign_notified_at")
+            sent += 1
+        for task, assignee, by in await self._repo.pending_outcomes():
+            try:
+                await self._notifier.send_outcome(by, task, assignee)
+            except Exception:
+                log.exception("failed to send outcome of %s", task.id)
+                continue
+            await self._repo.mark_task_notified(task.id, "outcome_notified_at")
+            sent += 1
+        for lst, adder_id, items in await self._repo.pending_list_additions():
+            adder = await self._repo.get_user(adder_id)
+            for recipient_id in await self._repo.list_participants(lst.id):
+                if recipient_id == adder_id:
+                    continue
+                recipient = await self._repo.get_user(recipient_id)
+                try:
+                    await self._notifier.send_list_additions(recipient, lst, adder, items)
+                    sent += 1
+                except Exception:
+                    log.exception("failed to send list additions to %s", recipient_id)
+            await self._repo.mark_items_notified([i.id for i in items])
+        return sent
+
     async def tick_reflection(self) -> int:
         """Разбирает затихшие разговоры и молча обновляет память (пользователь видит её только в /memory)."""
         if self._reflector is None:
@@ -137,7 +176,8 @@ class ReminderScheduler:
     async def run_forever(self) -> None:
         log.info("reminder scheduler started, poll every %ss", self._poll)
         while True:
-            for job in (self.tick, self.tick_digests, self.tick_dates, self.tick_reviews, self.tick_reflection):
+            for job in (self.tick, self.tick_shared, self.tick_digests, self.tick_dates, self.tick_reviews,
+                        self.tick_reflection):
                 try:
                     await job()
                 except Exception:

@@ -118,12 +118,15 @@ class Agent:
         memories = await self._repo.list_memories(user.id)
         tasks_block = "\n".join(json.dumps(task_view(t, user.timezone), ensure_ascii=False) for t in tasks)
         memories_block = "\n".join(json.dumps(memory_view(m, user.timezone), ensure_ascii=False) for m in memories)
+        shared = await self._repo.shared_list_ids(user.id)
         lists_block = "\n".join(f"«{lst.name}» — неотмеченных {open_}, всего {total}"
+                                + (" (общий)" if lst.id in shared else "")
                                 for lst, open_, total in await self._repo.user_lists(user.id))
+        people_block = "\n".join(f"- {conn.alias}" for conn, _ in await self._repo.connections(user.id))
         return Message("system", build_system_prompt(
             to_local(utcnow(), user.timezone), user.timezone, user.digest_time, tasks_block, memories_block,
             auto_memory=user.auto_memory, review_time=user.review_time, lists_block=lists_block,
-            habits_block="\n".join(profile.prompt_lines()),
+            habits_block="\n".join(profile.prompt_lines()), people_block=people_block,
         ))
 
     async def _handle(self, user: User, text: str, reference_time: datetime | None = None,

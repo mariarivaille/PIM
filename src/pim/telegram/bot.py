@@ -5,14 +5,20 @@ from aiogram.types import BotCommand, TelegramObject
 
 from pim.agent.agent import Agent
 from pim.config import Settings
-from pim.core.models import Task, User
+from pim.core.models import ItemList, ListItem, Task, User
 from pim.core.repository import Repository
 from pim.reminders.digest import Digest
 from pim.reminders.dates import UpcomingDate
 from pim.reminders.review import Review
 from pim.stt.base import Transcriber
+from pim.telegram.bot_helpers import invite_code
 from pim.telegram.handlers import make_router
 from pim.telegram.keyboards import (
+    assignment_text,
+    created_kb,
+    list_additions_text,
+    open_list_kb,
+    outcome_text,
     date_alert_kb,
     date_alert_text,
     format_digest,
@@ -24,14 +30,26 @@ from pim.telegram.keyboards import (
 
 
 class AllowlistMiddleware(BaseMiddleware):
-    def __init__(self, allowed: list[int]):
+    """Пускает: тех, кто в ALLOWED_USER_IDS; уже присоединившихся по приглашению; и пришедших с живым приглашением."""
+
+    def __init__(self, allowed: list[int], repo: Repository):
         self._allowed = set(allowed)
+        self._repo = repo
 
     async def __call__(self, handler, event: TelegramObject, data: dict):
         user = data.get("event_from_user")
-        if self._allowed and (user is None or user.id not in self._allowed):
-            return None
-        return await handler(event, data)
+        if not self._allowed or (user is not None and await self._is_allowed(user.id, event)):
+            return await handler(event, data)
+        return None
+
+    async def _is_allowed(self, user_id: int, event: TelegramObject) -> bool:
+        if user_id in self._allowed or await self._repo.get_user(user_id) is not None:
+            return True
+        text = getattr(event, "text", None) or ""
+        code = invite_code(text)
+        return code is not None and await self._repo.valid_invite(code) is not None
+
+
 
 
 class TelegramNotifier:
@@ -52,6 +70,17 @@ class TelegramNotifier:
     async def send_date_alert(self, user: User, upcoming: UpcomingDate) -> None:
         await self._bot.send_message(user.chat_id, date_alert_text(upcoming), reply_markup=date_alert_kb(upcoming))
 
+    async def send_assignment(self, assignee: User, task: Task, by: User) -> None:
+        await self._bot.send_message(assignee.chat_id, assignment_text(task, by, assignee.timezone),
+                                     reply_markup=created_kb(task))
+
+    async def send_outcome(self, by: User, task: Task, assignee: User) -> None:
+        await self._bot.send_message(by.chat_id, outcome_text(task, assignee))
+
+    async def send_list_additions(self, recipient: User, lst: ItemList, adder: User, items: list[ListItem]) -> None:
+        await self._bot.send_message(recipient.chat_id, list_additions_text(lst, adder, items),
+                                     reply_markup=open_list_kb(lst))
+
     async def send_review(self, user: User, review: Review) -> None:
         for text, kb in review_messages(review, user.timezone):
             await self._bot.send_message(user.chat_id, text, reply_markup=kb)
@@ -66,6 +95,8 @@ COMMANDS = [
     BotCommand(command="review", description="Разбор: что переносим?"),
     BotCommand(command="memory", description="Что я о тебе знаю"),
     BotCommand(command="habits", description="Твои привычки по времени"),
+    BotCommand(command="people", description="Близкие: поручения и общие списки"),
+    BotCommand(command="invite", description="Пригласить близкого"),
     BotCommand(command="reset", description="Забыть контекст разговора"),
 ]
 
@@ -85,7 +116,7 @@ def make_bot(settings: Settings) -> Bot:
 def make_dispatcher(agent: Agent, repo: Repository, settings: Settings,
                     transcriber: Transcriber | None = None) -> Dispatcher:
     dp = Dispatcher()
-    allowlist = AllowlistMiddleware(settings.allowed_user_ids)
+    allowlist = AllowlistMiddleware(settings.allowed_user_ids, repo)
     dp.message.outer_middleware(allowlist)
     dp.callback_query.outer_middleware(allowlist)
     dp.include_router(make_router(agent, repo, settings, transcriber))

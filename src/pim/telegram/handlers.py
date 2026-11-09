@@ -19,6 +19,7 @@ from pim.planning.day import apply_plan
 from pim.reminders.dates import CONGRATS_OFFSET, GIFT_OFFSET, UpcomingDate, reminder_at
 from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpone_to_tomorrow
 from pim.stt.base import Transcriber
+from pim.telegram.bot_helpers import INVITE_PREFIX, invite_code
 from pim.telegram.keyboards import (
     DateAction,
     ListAction,
@@ -34,6 +35,7 @@ from pim.telegram.keyboards import (
     list_card,
     lists_menu,
     memory_list,
+    people_text,
     plan_make_kb,
     plan_message,
     review_messages,
@@ -66,11 +68,22 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     async def ensure_user(msg_or_cb):
         tg_user = msg_or_cb.from_user
         chat = msg_or_cb.chat if isinstance(msg_or_cb, Message) else msg_or_cb.message.chat
-        return await repo.get_or_create_user(tg_user.id, chat.id, settings.default_timezone)
+        return await repo.get_or_create_user(tg_user.id, chat.id, settings.default_timezone,
+                                             name=tg_user.full_name)
 
     @router.message(CommandStart())
     async def start(message: Message):
         user = await ensure_user(message)
+        if code := invite_code(message.text or ""):
+            inviter_id = await repo.accept_invite(code, user.id)
+            if inviter_id is None:
+                await message.answer("Это приглашение уже использовано или устарело — попроси новое.")
+            else:
+                inviter = await repo.get_user(inviter_id)
+                await message.answer(f"🤝 Вы с {html.escape(inviter.name or 'пригласившим')} теперь связаны в Pim: "
+                                     "можно поручать друг другу дела и вести общие списки.")
+                await message.bot.send_message(inviter.chat_id, f"🤝 {html.escape(user.name or 'Новый участник')} "
+                                               "присоединяется к Pim по твоему приглашению.")
         digest = f"в {user.digest_time}" if user.digest_time else "выключена"
         review_at = f"в {user.review_time}" if user.review_time else "выключен"
         await message.answer(
@@ -81,6 +94,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             "/tasks — список дел\n/lists — списки (покупки, в поездку…)\n"
             "/digest — сводка на сегодня\n/plan — спланировать день\n/review — что переносим?\n"
             "/memory — что я о тебе знаю\n/habits — твои привычки по времени\n"
+            "/people — близкие: поручения и общие списки\n/invite — пригласить близкого\n"
             "/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
             "(«присылай сводку в 8:30» / «не присылай сводку»)\n"
@@ -183,16 +197,31 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         user = await ensure_user(message)
         await message.answer(habits_text(await load_profile(repo, user)))
 
+    @router.message(Command("invite"))
+    async def invite(message: Message):
+        user = await ensure_user(message)
+        code = await repo.create_invite(user.id)
+        me = await message.bot.me()
+        link = f"https://t.me/{me.username}?start={INVITE_PREFIX}{code}"
+        await message.answer(
+            "Отправь эту ссылку близкому — откроет, нажмёт «Старт», и вы будете связаны в Pim:\n\n"
+            f"{link}\n\nСсылка одноразовая и действует 7 дней.", disable_web_page_preview=True)
+
+    @router.message(Command("people"))
+    async def people(message: Message):
+        user = await ensure_user(message)
+        await message.answer(people_text(await repo.connections(user.id)))
+
     @router.message(Command("lists"))
     async def lists(message: Message):
         user = await ensure_user(message)
-        text, kb = lists_menu(await repo.user_lists(user.id))
+        text, kb = lists_menu(await repo.user_lists(user.id), await repo.shared_list_ids(user.id))
         await message.answer(text, reply_markup=kb)
 
     async def show_list_card(message: Message, user, list_id: int):
         lst = await repo.get_list(user.id, list_id)
         if lst:
-            text, kb = list_card(lst, await repo.list_items(lst.id))
+            text, kb = list_card(lst, await repo.list_items(lst.id), lst.id in await repo.shared_list_ids(user.id))
             await message.answer(text, reply_markup=kb)
 
     @router.callback_query(ListAction.filter())
@@ -211,7 +240,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         if lst is None:
             await cb.answer("Этого списка или пункта уже нет")
             return
-        text, kb = list_card(lst, await repo.list_items(lst.id))
+        text, kb = list_card(lst, await repo.list_items(lst.id), lst.id in await repo.shared_list_ids(user.id))
         await cb.message.edit_text(text, reply_markup=kb)
         await cb.answer()
 

@@ -28,6 +28,7 @@ from pim.core.timeutils import (
 from pim.learning.timing import TimeProfile
 from pim.lists.matching import display_name, match_items, match_list, normalize
 from pim.llm.base import ToolSpec
+from pim.sharing.people import find_person
 from pim.reminders.daily import parse_hhmm
 
 log = logging.getLogger(__name__)
@@ -417,6 +418,44 @@ async def plan_day(ctx: ToolContext, day: str = "today") -> dict:
     }
 
 
+# --- близкие ---
+
+
+async def _find_person(ctx: ToolContext, person: str):
+    people = await ctx.repo.connections(ctx.user.id)
+    if not people:
+        raise ToolError("у пользователя пока нет близких в Pim — скажи, что пригласить можно командой /invite")
+    found = find_person(people, person)
+    if found is None:
+        names = ", ".join(c.alias for c, _ in people)
+        raise ToolError(f"«{person}» нет среди близких в Pim (есть: {names}). Pim умеет передавать только тем, "
+                        "кто в нём есть, — не предлагай телефон, почту и т.п.; скажи, что пригласить можно командой /invite")
+    return found
+
+
+async def share_list(ctx: ToolContext, list: str, person: str) -> dict:
+    lst = await _find_list(ctx, list)
+    if lst.user_id != ctx.user.id:
+        raise ToolError("это чужой общий список — поделиться им может только владелец")
+    conn, peer = await _find_person(ctx, person)
+    added = await ctx.repo.add_list_member(lst.id, peer.id)
+    return {"shared_list": lst.name, "with": conn.alias, "already_shared": not added}
+
+
+async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | None = None, day: str | None = None,
+                      time: str | None = None, in_minutes: int | None = None, notes: str | None = None) -> dict:
+    conn, peer = await _find_person(ctx, person)
+    due, _ = _resolve_due(ctx, due_at, day, time, in_minutes)
+    # от кого — в заметке: видно и в карточке, и в напоминании, и в /tasks
+    who = f"Просьба от {ctx.user.name or 'близкого'}"
+    task = await ctx.repo.create_assigned_task(peer.id, ctx.user.id, title=title, due_at=due,
+                                               notes=f"{who}. {notes}" if notes else who)
+    return {"assigned_to": conn.alias, "title": task.title,
+            "due": format_local(due, ctx.user.timezone) if due else None,
+            "note": f"{conn.alias} получит сообщение сейчас" + (" и напоминание в срок" if due else "")
+                    + "; когда сделает — пользователю придёт уведомление"}
+
+
 async def set_auto_memory(ctx: ToolContext, enabled: bool) -> dict:
     await ctx.repo.set_auto_memory(ctx.user.id, bool(enabled))
     ctx.user.auto_memory = bool(enabled)
@@ -473,7 +512,7 @@ async def add_to_list(ctx: ToolContext, list: str, items: Any) -> dict:
     for text in texts:
         (duplicates if normalize(text) in already else new).append(text)
         already.add(normalize(text))
-    await ctx.repo.add_items(lst.id, new)
+    await ctx.repo.add_items(lst.id, new, added_by=ctx.user.id)
     view = await _list_view(ctx, lst)
     return {**view, "created_list": created, "added": new, "already_there": duplicates}
 
@@ -499,7 +538,8 @@ async def show_list(ctx: ToolContext, list: str) -> dict:
 
 async def delete_list(ctx: ToolContext, list: str) -> dict:
     lst = await _find_list(ctx, list)
-    await ctx.repo.delete_list(ctx.user.id, lst.id)
+    if await ctx.repo.delete_list(ctx.user.id, lst.id) is None:
+        raise ToolError("это общий список другого человека — удалить его может только владелец")
     if lst.id in ctx.lists_touched:
         ctx.lists_touched.remove(lst.id)
     return {"deleted_list": lst.name}
@@ -537,6 +577,7 @@ _LIST = {"type": "string",
 # Строка, а не массив: с массивом GigaChat добавляет по одному пункту за вызов (N запросов к модели вместо одного)
 _ITEMS = {"type": "string",
           "description": "ВСЕ пункты из фразы одной строкой через запятую: «молоко, хлеб, яйца»"}
+_PERSON = {"type": "string", "description": "Имя близкого, как его назвал пользователь: «Андрей», «мама»"}
 _MEMORY_NUMBER = {"type": "integer", "description": "номер факта в памяти (поле number)"}
 _KIND = {
     "type": "string",
@@ -720,6 +761,34 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                   "properties": {"day": {**_DAY, "description": "Какой день планировать: today (по умолчанию), "
                                                                 "tomorrow или день недели"}}}),
         plan_day,
+    ),
+    "share_list": (
+        ToolSpec("share_list", "Сделать список общим с близким человеком: он увидит его и сможет отмечать и добавлять.",
+                 {"type": "object",
+                  "properties": {"list": _LIST, "person": _PERSON},
+                  "required": ["list", "person"]}),
+        share_list,
+    ),
+    "assign_task": (
+        ToolSpec(
+            "assign_task",
+            "Поручить дело близкому («напомни Андрею купить хлеб вечером»): дело появится у него, он получит "
+            "сообщение и напоминание, а пользователю придёт уведомление, когда тот сделает.",
+            {
+                "type": "object",
+                "properties": {
+                    "person": _PERSON,
+                    "title": {"type": "string", "description": "Что сделать, в инфинитиве: «купить хлеб»"},
+                    "day": _DAY,
+                    "time": _TIME,
+                    "in_minutes": _IN_MINUTES,
+                    "due_at": _DUE,
+                    "notes": {"type": "string", "description": "Детали, если есть"},
+                },
+                "required": ["person", "title"],
+            },
+        ),
+        assign_task,
     ),
     "set_auto_memory": (
         ToolSpec(
