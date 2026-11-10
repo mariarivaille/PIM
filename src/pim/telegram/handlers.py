@@ -16,6 +16,7 @@ from pim.learning.timing import load_profile
 from pim.llm.base import Image
 from pim.reminders.digest import build_digest
 from pim.planning.day import apply_plan
+from pim.sharing import negotiation
 from pim.reminders.dates import CONGRATS_OFFSET, GIFT_OFFSET, UpcomingDate, reminder_at
 from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpone_to_tomorrow
 from pim.stt.base import Transcriber
@@ -29,8 +30,9 @@ from pim.telegram.keyboards import (
     TaskAction,
     DATE_CONGRATS,
     DATE_GIFT,
-    adjusted_text,
     assign_reply_text,
+    assignment_kb,
+    counter_text,
     created_kb,
     date_alert_kb,
     format_digest,
@@ -350,52 +352,61 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         await send_reply(message, user, reply)
 
     async def adjust_assignment(message: Message, user, text: str):
+        """Следующее сообщение после «✏️ Скорректировать»: новая версия поручения, ход — другой стороне."""
         task_id = user.adjusting_task_id
         await repo.set_adjusting(user.id, None)
-        before = await repo.get_task(user.id, task_id)
-        if before is None or before.status != TaskStatus.OPEN:
+        turn = await negotiation.check_turn(repo, user.id, task_id)
+        if turn.task is None:
             await process(message, await repo.get_user(user.id), text)  # поручения уже нет — обычное сообщение
             return
-        before_title = before.title
-        before_due = format_local(before.due_at, user.timezone) if before.due_at else "без срока"
+        before = turn.task
+        other = await repo.get_user(negotiation.other_party(before, user.id))
+        before_title, before_due = before.title, (format_local(before.due_at, other.timezone)
+                                                  if before.due_at else "без срока")
         try:
             reply = await agent.handle_adjustment(user, before, text)
         except Exception:
             log.exception("adjustment failed")
             await message.answer("Не получилось поправить, попробуй ещё раз: нажми «✏️ Скорректировать».")
             return
-        await send_reply(message, user, reply)
-        after = await repo.get_task(user.id, task_id)
-        after_due = format_local(after.due_at, user.timezone) if after.due_at else "без срока"
+        after = await repo.get_task(before.user_id, task_id)
+        after_due = format_local(after.due_at, other.timezone) if after.due_at else "без срока"
         if after.title == before_title and after_due == before_due:
+            await message.answer(html.escape(reply.text) + "\n\nПоручение не изменилось — "
+                                 "ответь на него кнопками или нажми «✏️ Скорректировать» ещё раз.")
             return
-        await repo.set_assign_state(user.id, task_id, "accepted")
-        by = await repo.get_user(after.assigned_by)
-        name = await repo.display_name(by.id, user.id)
-        await message.bot.send_message(by.chat_id, adjusted_text(name, before_title, before_due, after, by.timezone))
+        after = await negotiation.counter(repo, user.id, task_id)
+        name = await repo.display_name(other.id, user.id)
+        await message.answer(f"✏️ Отправил новую версию — ждём ответа: «{html.escape(after.title)}», "
+                             f"{format_local(after.due_at, user.timezone) if after.due_at else 'без срока'}")
+        await message.bot.send_message(other.chat_id, counter_text(name, before_title, before_due, after,
+                                                                   other.timezone),
+                                       reply_markup=assignment_kb(after))
 
     @router.callback_query(AssignAction.filter())
     async def on_assign_action(cb: CallbackQuery, callback_data: AssignAction):
         user = await ensure_user(cb)
-        task = await repo.get_task(user.id, callback_data.task_id)
-        if task is None or task.assigned_by is None or task.status != TaskStatus.OPEN:
-            await cb.answer("Этого поручения уже нет")
+        turn = await negotiation.check_turn(repo, user.id, callback_data.task_id, callback_data.round)
+        if turn.task is None:
+            await cb.answer(turn.error, show_alert=True)
             return
         if callback_data.action == "adjust":
-            await repo.set_adjusting(user.id, task.id)
+            await repo.set_adjusting(user.id, turn.task.id)
             await cb.message.answer("✏️ Напиши, что поправить: например «давай в четверг в 13», «лучше в 14:00» "
                                     "или «не купить, а заказать».")
             await cb.answer()
             return
-        state = "accepted" if callback_data.action == "accept" else "declined"
-        task = await repo.set_assign_state(user.id, task.id, state)
-        by = await repo.get_user(task.assigned_by)
-        name = await repo.display_name(by.id, user.id)
-        await cb.message.bot.send_message(by.chat_id, assign_reply_text(task, name, callback_data.action))
-        if state == "accepted":
-            await cb.message.edit_text(f"{cb.message.html_text}\n\n👍 Принято", reply_markup=created_kb(task))
-        else:
-            await cb.message.edit_text(f"{cb.message.html_text}\n\n✖️ Отклонено", reply_markup=None)
+        accepted = callback_data.action == "accept"
+        task = (await negotiation.respond(repo, user.id, turn.task.id, callback_data.round, accepted)).task
+        other = await repo.get_user(negotiation.other_party(task, user.id))
+        name = await repo.display_name(other.id, user.id)
+        # исполнителю после договорённости — обычные кнопки дела «Сделано / Удалить»
+        other_kb = created_kb(task) if accepted and other.id == task.user_id else None
+        await cb.message.bot.send_message(other.chat_id, assign_reply_text(task, name, accepted, other.timezone),
+                                          reply_markup=other_kb)
+        own_kb = created_kb(task) if accepted and user.id == task.user_id else None
+        note = "🤝 Договорились" if accepted else "✖️ Отклонено — поручение отменено"
+        await cb.message.edit_text(f"{cb.message.html_text}\n\n{note}", reply_markup=own_kb)
         await cb.answer()
 
     async def send_reply(message: Message, user, reply):

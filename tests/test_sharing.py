@@ -195,20 +195,52 @@ async def test_assignment_wording_is_from_assignee_view(repo, user, pair):
     assert "assigned_to" in await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "позвать Марию на кофе"})
 
 
-async def test_accept_decline_assignment(repo, user, pair):
+async def test_negotiation_turns_rounds_and_outcomes(repo, user, pair):
+    from pim.sharing import negotiation
+
     maria, andrey = pair
     ctx = ToolContext(repo, maria)
     await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "купить хлеб"})
     await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "помыть машину"})
     bread, car = await repo.list_open_tasks(andrey.id)
-    assert bread.assign_state == "pending"
+    assert (bread.assign_state, bread.assign_round) == ("pending", 1)
+    assert negotiation.turn_of(bread) == andrey.id
 
-    assert await repo.set_assign_state(maria.id, bread.id, "accepted") is None  # чужое поручение не трогаем
-    assert (await repo.set_assign_state(andrey.id, bread.id, "accepted")).assign_state == "accepted"
-    declined = await repo.set_assign_state(andrey.id, car.id, "declined")
+    # не её ход — Мария принять не может; посторонний — тем более
+    assert (await negotiation.respond(repo, maria.id, bread.id, 1, True)).error == "Сейчас ждём ответа другой стороны"
+    olga = await repo.get_or_create_user(3, 300, TZ, name="Ольга")
+    assert (await negotiation.respond(repo, olga.id, bread.id, 1, True)).error == "Этого поручения уже нет"
+
+    # Андрей корректирует → новая версия, ход у Марии; кнопки под версией 1 больше не работают
+    countered = await negotiation.counter(repo, andrey.id, bread.id)
+    assert (countered.assign_state, countered.assign_round) == ("countered", 2)
+    assert negotiation.turn_of(countered) == maria.id
+    assert "неактуальная" in (await negotiation.respond(repo, maria.id, bread.id, 1, True)).error
+    # Мария тоже корректирует → ход снова у Андрея
+    again = await negotiation.counter(repo, maria.id, bread.id)
+    assert (again.assign_state, again.assign_round, negotiation.turn_of(again)) == ("pending", 3, andrey.id)
+    # Андрей принимает — договорились, дальше переговоров нет
+    done = (await negotiation.respond(repo, andrey.id, bread.id, 3, True)).task
+    assert done.assign_state == "accepted" and negotiation.turn_of(done) is None
+    assert "договорились" in (await negotiation.respond(repo, maria.id, bread.id, 3, True)).error
+
+    # отказ закрывает дело, второго «отменено» от планировщика не будет
+    declined = (await negotiation.respond(repo, andrey.id, car.id, 1, False)).task
     assert declined.status == TaskStatus.CANCELLED
-    # об отказе поручившему сообщили кнопкой — второго «отменено» от планировщика не будет
     assert all(t.id != car.id for t, _, _ in await repo.pending_outcomes())
+
+
+async def test_assigner_can_adjust_only_the_negotiated_task(repo, user, pair):
+    maria, andrey = pair
+    await run_tool(ToolContext(repo, maria), "assign_task", {"person": "Андрей", "title": "купить хлеб"})
+    [task] = await repo.list_open_tasks(andrey.id)
+    other = await repo.create_task(andrey.id, "личное дело Андрея")
+
+    ctx = ToolContext(repo, maria, adjust_task=task)
+    res = await run_tool(ctx, "update_task", {"task_id": task.id, "title": "купить хлеб и молоко"})
+    assert res["updated"]["title"] == "купить хлеб и молоко"
+    assert (await repo.get_task(andrey.id, task.id)).title == "купить хлеб и молоко"  # дело осталось у Андрея
+    assert "error" in await run_tool(ctx, "update_task", {"task_id": other.id, "title": "взлом"})
 
 
 async def test_adjustment_changes_the_assigned_task(repo, user, pair):
@@ -233,14 +265,18 @@ async def test_adjustment_changes_the_assigned_task(repo, user, pair):
 
 
 def test_assign_reply_texts():
-    from pim.telegram.keyboards import adjusted_text, assign_reply_text, assignment_kb
-    task = SimpleNamespace(id=5, title="позвать Марию на кофе", due_at=None)
-    assert assign_reply_text(task, "Андрей", "accept") == "👍 Андрей принимает: «позвать Марию на кофе»"
-    assert assign_reply_text(task, "Андрей", "decline").startswith("✖️ Андрей отклоняет")
-    assert [b.text for row in assignment_kb(task).inline_keyboard for b in row] == [
-        "✅ Принять", "✖️ Отклонить", "✏️ Скорректировать"]
-    text = adjusted_text("Андрей", "позвать Марию на кофе", "вт 10.11 13:00", task, TZ)
-    assert "срок: вт 10.11 13:00 → без срока" in text and "было «" not in text
+    from pim.telegram.keyboards import assign_reply_text, assignment_kb, counter_text
+    task = SimpleNamespace(id=5, title="позвать Марию на кофе", due_at=None, rrule=None, notes=None, assign_round=3,
+                           status=TaskStatus.OPEN)
+    assert assign_reply_text(task, "Андрей", True, TZ) == (
+        "🤝 Андрей принимает — договорились: «позвать Марию на кофе», без срока")
+    assert assign_reply_text(task, "Андрей", False, TZ).startswith("✖️ Андрей отклоняет")
+    kb = assignment_kb(task)
+    assert [b.text for row in kb.inline_keyboard for b in row] == ["✅ Принять", "✖️ Отклонить", "✏️ Скорректировать"]
+    assert kb.inline_keyboard[0][0].callback_data.endswith(":3")  # номер версии в кнопке
+    text = counter_text("Андрей", "позвать Марию на кофе", "вт 10.11 13:00", task, TZ)
+    assert text.startswith("✏️ <b>Андрей предлагает изменить поручение:</b>")
+    assert "срок: вт 10.11 13:00 → без срока" in text
 
 
 async def test_several_names_for_a_person(repo, user, pair):

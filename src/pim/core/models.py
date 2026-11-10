@@ -132,8 +132,10 @@ class Task(Base):
     assigned_by: Mapped[int | None] = mapped_column(BigInteger, index=True)
     assign_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     outcome_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    # Ответ исполнителя на поручение: pending (ещё не ответил) | accepted | declined
+    # Переговоры по поручению (pim/sharing/negotiation.py): pending — ход исполнителя, countered — ход
+    # поручившего, accepted | declined — итог; assign_round — номер версии, чтобы не нажать кнопку под старой
     assign_state: Mapped[str | None] = mapped_column(String(16))
+    assign_round: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class ItemList(Base):

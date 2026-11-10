@@ -112,7 +112,7 @@ class Agent:
         wrapped = (f"[Корректировка поручения: дело task_id={task.id} «{task.title}», сейчас {due}. Измени его через "
                    f"update_task(task_id={task.id}) так, как просит пользователь; новых дел не создавай]\n{text}")
         async with self._locks[user.id]:
-            return await self._handle(user, wrapped)
+            return await self._handle(user, wrapped, adjust_task=task)
 
     async def _delete_facts(self, user: User, numbers: list[int]) -> AgentReply:
         lines = []
@@ -140,21 +140,21 @@ class Agent:
         ))
 
     async def _handle(self, user: User, text: str, reference_time: datetime | None = None,
-                      images: list[Image] | None = None) -> AgentReply:
+                      images: list[Image] | None = None, adjust_task: Task | None = None) -> AgentReply:
         try:
-            return await self._run(user, text, reference_time, images or [])
+            return await self._run(user, text, reference_time, images or [], adjust_task)
         finally:
             if images:
                 await self._llm.cleanup(images)
 
     async def _run(self, user: User, text: str, reference_time: datetime | None,
-                   images: list[Image]) -> AgentReply:
+                   images: list[Image], adjust_task: Task | None = None) -> AgentReply:
         history = await self.history.get(user.id)
         prev_assistant = next((m.content for m in reversed(history) if m.role == "assistant"), "")
         profile = await load_profile(self._repo, user)
         ctx = ToolContext(repo=self._repo, user=user, user_text=text, prev_assistant=prev_assistant,
                           max_memories=self._max_memories, reference_time=reference_time, profile=profile,
-                          planner=self._planner)
+                          planner=self._planner, adjust_task=adjust_task)
         # в историю уходит только текст (с пометкой «[Фото…]»), сама картинка — только в этот ход
         user_msg = Message("user", text, images=images)
         messages = [await self._system_message(user, profile), *history, user_msg]

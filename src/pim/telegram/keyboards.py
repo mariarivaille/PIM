@@ -27,34 +27,40 @@ class TaskAction(CallbackData, prefix="t"):
 class AssignAction(CallbackData, prefix="a"):
     action: str  # accept | decline | adjust
     task_id: int
+    round: int = 1  # номер версии поручения: кнопки под старой версией не срабатывают
 
 
 def assignment_kb(task: Task) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Принять", callback_data=AssignAction(action="accept", task_id=task.id))
-    kb.button(text="✖️ Отклонить", callback_data=AssignAction(action="decline", task_id=task.id))
-    kb.button(text="✏️ Скорректировать", callback_data=AssignAction(action="adjust", task_id=task.id))
+    rnd = task.assign_round or 1
+    kb.button(text="✅ Принять", callback_data=AssignAction(action="accept", task_id=task.id, round=rnd))
+    kb.button(text="✖️ Отклонить", callback_data=AssignAction(action="decline", task_id=task.id, round=rnd))
+    kb.button(text="✏️ Скорректировать", callback_data=AssignAction(action="adjust", task_id=task.id, round=rnd))
     kb.adjust(2, 1)
     return kb.as_markup()
 
 
-def assign_reply_text(task: Task, assignee_name: str, action: str) -> str:
-    """Что получает поручивший, когда исполнитель ответил кнопкой."""
+def _due_text(task: Task, tz: str) -> str:
+    return format_local(task.due_at, tz) if task.due_at else "без срока"
+
+
+def assign_reply_text(task: Task, name: str, accepted: bool, tz: str) -> str:
+    """Другой стороне — что ответивший нажал «Принять» / «Отклонить»."""
     title = html.escape(task.title)
-    if action == "accept":
-        return f"👍 {html.escape(assignee_name)} принимает: «{title}»"
-    return f"✖️ {html.escape(assignee_name)} отклоняет: «{title}»"
+    if accepted:
+        return f"🤝 {html.escape(name)} принимает — договорились: «{title}», {_due_text(task, tz)}"
+    return f"✖️ {html.escape(name)} отклоняет: «{title}» — поручение отменено"
 
 
-def adjusted_text(assignee_name: str, before_title: str, before_due: str, task: Task, tz: str) -> str:
-    after_due = format_local(task.due_at, tz) if task.due_at else "без срока"
+def counter_text(name: str, before_title: str, before_due: str, task: Task, tz: str) -> str:
+    """Встречное предложение: что поменялось + карточка новой версии."""
     changes = []
     if task.title != before_title:
         changes.append(f"было «{html.escape(before_title)}» → стало «{html.escape(task.title)}»")
-    if after_due != before_due:
-        changes.append(f"срок: {before_due} → {after_due}")
-    return (f"✏️ {html.escape(assignee_name)} поправляет поручение «{html.escape(before_title)}»:\n"
-            + "\n".join(changes))
+    if _due_text(task, tz) != before_due:
+        changes.append(f"срок: {before_due} → {_due_text(task, tz)}")
+    return (f"✏️ <b>{html.escape(name)} предлагает изменить поручение:</b>\n" + "\n".join(changes)
+            + f"\n\n{task_card(task, tz)}")
 
 
 class ReviewAction(CallbackData, prefix="r"):

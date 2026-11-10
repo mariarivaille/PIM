@@ -447,13 +447,23 @@ class Repository:
             s.add(task)
         return task
 
-    async def set_assign_state(self, user_id: int, task_id: int, state: str) -> Task | None:
-        """Ответ исполнителя на поручение. declined закрывает дело — поручившему сообщают отдельно, не «отменено»."""
+    async def get_party_task(self, user_id: int, task_id: int) -> Task | None:
+        """Поручение, если пользователь в нём участвует — как исполнитель или как поручивший."""
+        async with self._sm() as s:
+            task = await s.get(Task, task_id)
+            if task and task.assigned_by is not None and user_id in (task.user_id, task.assigned_by):
+                return task
+            return None
+
+    async def set_negotiation(self, task_id: int, state: str, bump_round: bool = False) -> Task | None:
+        """Новое состояние переговоров. declined закрывает дело — сторонам сообщают отдельно, не «отменено»."""
         async with self._sm() as s, s.begin():
             task = await s.get(Task, task_id)
-            if not task or task.user_id != user_id or task.assigned_by is None:
+            if task is None:
                 return None
             task.assign_state = state
+            if bump_round:
+                task.assign_round = (task.assign_round or 1) + 1
             if state == "declined":
                 task.status = TaskStatus.CANCELLED
                 task.outcome_notified_at = utcnow()

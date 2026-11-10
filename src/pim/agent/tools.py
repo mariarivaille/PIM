@@ -53,6 +53,8 @@ class ToolContext:
     asked_whose_task: bool = False
     # уже просили переписать поручение от лица исполнителя (без «меня»)
     asked_assign_wording: bool = False
+    # поручение, которое пользователь сейчас корректирует (переговоры) — его можно менять, даже если оно не его
+    adjust_task: Task | None = None
     # от какого момента считать «завтра», «через час»; None = сейчас (для пересланных — дата отправки)
     reference_time: datetime | None = None
     # id списков, изменённых или открытых за ход — телеграм-слой покажет их с чекбоксами
@@ -185,6 +187,9 @@ def _check_rrule(value: str | None) -> str | None:
 
 
 async def _get(ctx: ToolContext, task_id: int) -> Task:
+    if ctx.adjust_task is not None and int(task_id) == ctx.adjust_task.id:
+        # корректировка поручения: поручивший правит дело, которое лежит у исполнителя — только это одно
+        return await ctx.repo.get_task(ctx.adjust_task.user_id, int(task_id))
     task = await ctx.repo.get_task(ctx.user.id, int(task_id))
     if not task:
         raise ToolError(f"задача {task_id} не найдена")
@@ -275,7 +280,7 @@ async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, 
         fields["rrule"] = _check_rrule(rrule)
     if notes is not None:
         fields["notes"] = notes or None
-    task = await ctx.repo.update_task(ctx.user.id, int(task_id), **fields)
+    task = await ctx.repo.update_task(task.user_id, int(task_id), **fields)
     ctx.touched.append(task)
     return {"updated": _due_view(ctx, task, auto)}
 
