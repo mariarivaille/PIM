@@ -70,15 +70,16 @@ class TelegramNotifier:
     async def send_date_alert(self, user: User, upcoming: UpcomingDate) -> None:
         await self._bot.send_message(user.chat_id, date_alert_text(upcoming), reply_markup=date_alert_kb(upcoming))
 
-    async def send_assignment(self, assignee: User, task: Task, by: User) -> None:
-        await self._bot.send_message(assignee.chat_id, assignment_text(task, by, assignee.timezone),
+    async def send_assignment(self, assignee: User, task: Task, by_name: str) -> None:
+        await self._bot.send_message(assignee.chat_id, assignment_text(task, by_name, assignee.timezone),
                                      reply_markup=created_kb(task))
 
-    async def send_outcome(self, by: User, task: Task, assignee: User) -> None:
-        await self._bot.send_message(by.chat_id, outcome_text(task, assignee))
+    async def send_outcome(self, by: User, task: Task, assignee_name: str) -> None:
+        await self._bot.send_message(by.chat_id, outcome_text(task, assignee_name))
 
-    async def send_list_additions(self, recipient: User, lst: ItemList, adder: User, items: list[ListItem]) -> None:
-        await self._bot.send_message(recipient.chat_id, list_additions_text(lst, adder, items),
+    async def send_list_additions(self, recipient: User, lst: ItemList, adder_name: str,
+                                  items: list[ListItem]) -> None:
+        await self._bot.send_message(recipient.chat_id, list_additions_text(lst, adder_name, items),
                                      reply_markup=open_list_kb(lst))
 
     async def send_review(self, user: User, review: Review) -> None:

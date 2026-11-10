@@ -393,6 +393,24 @@ class Repository:
             )
             return [(c, u) for c, u in res.all()]
 
+    async def display_name(self, viewer_id: int, user_id: int) -> str:
+        """Как viewer видит user: его alias для этого человека, иначе имя из Telegram."""
+        async with self._sm() as s:
+            alias = await s.scalar(select(Connection.alias).where(Connection.user_id == viewer_id,
+                                                                  Connection.peer_id == user_id))
+            if alias:
+                return alias
+            user = await s.get(User, user_id)
+            return (user.name if user else None) or "Близкий"
+
+    async def set_alias(self, user_id: int, peer_id: int, alias: str) -> None:
+        """Как user_id видит peer_id."""
+        async with self._sm() as s, s.begin():
+            conn = await s.scalar(select(Connection).where(Connection.user_id == user_id,
+                                                           Connection.peer_id == peer_id))
+            if conn:
+                conn.alias = alias
+
     async def create_assigned_task(self, assignee_id: int, assigned_by: int, title: str,
                                    due_at: datetime | None = None, notes: str | None = None) -> Task:
         async with self._sm() as s, s.begin():

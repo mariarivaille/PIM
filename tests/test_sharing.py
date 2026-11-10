@@ -100,11 +100,11 @@ async def test_assign_task_and_outcome(repo, user, pair):
     sent = []
 
     class Notifier:
-        async def send_assignment(self, assignee, t, by):
-            sent.append(("assign", assignee.name, by.name, t.title))
+        async def send_assignment(self, assignee, t, by_name):
+            sent.append(("assign", assignee.name, by_name, t.title))
 
-        async def send_outcome(self, by, t, assignee):
-            sent.append(("outcome", by.name, assignee.name, t.status))
+        async def send_outcome(self, by, t, assignee_name):
+            sent.append(("outcome", by.name, assignee_name, t.status))
 
         async def send_list_additions(self, *a):
             pass
@@ -146,14 +146,48 @@ async def test_allowlist_middleware(repo, user, pair):
 
 
 def test_texts():
-    maria, andrey = SimpleNamespace(name="Мария"), SimpleNamespace(name="Андрей")
     task = SimpleNamespace(id=1, title="купить хлеб", due_at=None, rrule=None, notes="Просьба от Мария",
                            status=TaskStatus.DONE)
-    assert assignment_text(task, maria, TZ).startswith("📨 <b>Мария просит:</b>")
-    assert outcome_text(task, andrey) == "✅ Андрей: «купить хлеб» — сделано"
+    assert assignment_text(task, "Мария", TZ).startswith("📨 <b>Мария просит:</b>")
+    assert outcome_text(task, "Андрей") == "✅ Андрей: «купить хлеб» — сделано"
     task.status = TaskStatus.CANCELLED
-    assert outcome_text(task, andrey).startswith("🗑")
+    assert outcome_text(task, "Андрей").startswith("🗑")
     lst = SimpleNamespace(id=1, name="Покупки")
     items = [SimpleNamespace(text="сыр"), SimpleNamespace(text="хлеб")]
-    assert list_additions_text(lst, andrey, items) == "🛒 Андрей добавляет в «Покупки»: сыр, хлеб"
+    assert list_additions_text(lst, "Андрей", items) == "🛒 Андрей добавляет в «Покупки»: сыр, хлеб"
     assert "/invite" in people_text([])
+
+
+async def test_create_task_asks_whose_task_when_close_person_mentioned(repo, user, pair):
+    maria, andrey = pair
+    ctx = ToolContext(repo, maria, user_text="Андрей должен позвать меня на кофе в обед")
+    res = await run_tool(ctx, "create_task", {"title": "позвать меня на кофе", "day": "today", "time": "13:00"})
+    assert "assign_task" in res["error"] and "Андрей Петров" in res["error"]
+    # если модель настаивает (это и правда дело пользователя) — второй раз не мешаем
+    res = await run_tool(ctx, "create_task", {"title": "позвонить Андрею", "day": "today", "time": "13:00"})
+    assert "created" in res
+    # без упоминаний близких — сразу
+    ctx = ToolContext(repo, maria, user_text="купить хлеб в 19")
+    assert "created" in await run_tool(ctx, "create_task", {"title": "купить хлеб", "day": "today", "time": "19:00"})
+
+
+async def test_rename_and_display_names(repo, user, pair):
+    maria, andrey = pair
+    assert await repo.display_name(andrey.id, maria.id) == "Мария"
+    m_ctx = ToolContext(repo, maria)
+    await run_tool(m_ctx, "rename_person", {"person": "Андрей", "new_name": "Андрюша"})
+    await run_tool(m_ctx, "rename_person", {"person": "Андрюше", "new_name": "Маша", "who": "me"})
+    assert [c.alias for c, _ in await repo.connections(maria.id)] == ["Андрюша"]
+    assert await repo.display_name(andrey.id, maria.id) == "Маша"
+    # поручение подписано так, как исполнитель зовёт поручившего
+    await run_tool(m_ctx, "assign_task", {"person": "Андрюша", "title": "купить хлеб"})
+    [task] = await repo.list_open_tasks(andrey.id)
+    assert task.notes == "Просьба от Маша"
+
+
+async def test_assignment_wording_is_from_assignee_view(repo, user, pair):
+    maria, andrey = pair
+    ctx = ToolContext(repo, maria)
+    res = await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "позвать меня на кофе"})
+    assert "Мария" in res["error"]
+    assert "assigned_to" in await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "позвать Марию на кофе"})

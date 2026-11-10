@@ -124,23 +124,21 @@ def plan_message(plan: Plan, tz: str) -> tuple[str, InlineKeyboardMarkup | None]
     return _fit(parts), kb.as_markup()
 
 
-def _who(user) -> str:
-    return html.escape(user.name or "Близкий")
+# Имена — как получатель сообщения зовёт этого человека (Repository.display_name)
+
+def assignment_text(task: Task, by_name: str, tz: str) -> str:
+    return f"📨 <b>{html.escape(by_name)} просит:</b>\n\n{task_card(task, tz)}"
 
 
-def assignment_text(task: Task, by, tz: str) -> str:
-    return f"📨 <b>{_who(by)} просит:</b>\n\n{task_card(task, tz)}"
-
-
-def outcome_text(task: Task, assignee) -> str:
+def outcome_text(task: Task, assignee_name: str) -> str:
     if task.status == TaskStatus.DONE:
-        return f"✅ {_who(assignee)}: «{html.escape(task.title)}» — сделано"
-    return f"🗑 {_who(assignee)}: «{html.escape(task.title)}» — отменено"
+        return f"✅ {html.escape(assignee_name)}: «{html.escape(task.title)}» — сделано"
+    return f"🗑 {html.escape(assignee_name)}: «{html.escape(task.title)}» — отменено"
 
 
-def list_additions_text(lst: ItemList, adder, items: list[ListItem]) -> str:
+def list_additions_text(lst: ItemList, adder_name: str, items: list[ListItem]) -> str:
     what = ", ".join(html.escape(i.text) for i in items)
-    return f"{_list_icon(lst.name)} {_who(adder)} добавляет в «{html.escape(lst.name)}»: {what}"
+    return f"{_list_icon(lst.name)} {html.escape(adder_name)} добавляет в «{html.escape(lst.name)}»: {what}"
 
 
 def open_list_kb(lst: ItemList) -> InlineKeyboardMarkup:

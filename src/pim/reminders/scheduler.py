@@ -28,11 +28,13 @@ class Notifier(Protocol):
 
     async def send_date_alert(self, user: User, upcoming: UpcomingDate) -> None: ...
 
-    async def send_assignment(self, assignee: User, task: Task, by: User) -> None: ...
+    # имена — как получатель зовёт этого человека (Repository.display_name)
+    async def send_assignment(self, assignee: User, task: Task, by_name: str) -> None: ...
 
-    async def send_outcome(self, by: User, task: Task, assignee: User) -> None: ...
+    async def send_outcome(self, by: User, task: Task, assignee_name: str) -> None: ...
 
-    async def send_list_additions(self, recipient: User, lst: ItemList, adder: User, items: list[ListItem]) -> None: ...
+    async def send_list_additions(self, recipient: User, lst: ItemList, adder_name: str,
+                                  items: list[ListItem]) -> None: ...
 
 
 class ReminderScheduler:
@@ -125,7 +127,7 @@ class ReminderScheduler:
         sent = 0
         for task, assignee, by in await self._repo.pending_assignments():
             try:
-                await self._notifier.send_assignment(assignee, task, by)
+                await self._notifier.send_assignment(assignee, task, await self._repo.display_name(assignee.id, by.id))
             except Exception:
                 log.exception("failed to send assignment %s", task.id)
                 continue
@@ -133,20 +135,20 @@ class ReminderScheduler:
             sent += 1
         for task, assignee, by in await self._repo.pending_outcomes():
             try:
-                await self._notifier.send_outcome(by, task, assignee)
+                await self._notifier.send_outcome(by, task, await self._repo.display_name(by.id, assignee.id))
             except Exception:
                 log.exception("failed to send outcome of %s", task.id)
                 continue
             await self._repo.mark_task_notified(task.id, "outcome_notified_at")
             sent += 1
         for lst, adder_id, items in await self._repo.pending_list_additions():
-            adder = await self._repo.get_user(adder_id)
             for recipient_id in await self._repo.list_participants(lst.id):
                 if recipient_id == adder_id:
                     continue
                 recipient = await self._repo.get_user(recipient_id)
+                adder_name = await self._repo.display_name(recipient_id, adder_id)
                 try:
-                    await self._notifier.send_list_additions(recipient, lst, adder, items)
+                    await self._notifier.send_list_additions(recipient, lst, adder_name, items)
                     sent += 1
                 except Exception:
                     log.exception("failed to send list additions to %s", recipient_id)

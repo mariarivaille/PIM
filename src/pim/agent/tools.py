@@ -49,6 +49,10 @@ class ToolContext:
     auto_time: set[int] = field(default_factory=set)
     # уже просили модель выбрать время за этот ход — второй раз не просим, ставим запасное
     asked_for_time: bool = False
+    # уже переспросили модель «чьё это дело», когда в сообщении упомянут близкий
+    asked_whose_task: bool = False
+    # уже просили переписать поручение от лица исполнителя (без «меня»)
+    asked_assign_wording: bool = False
     # от какого момента считать «завтра», «через час»; None = сейчас (для пересланных — дата отправки)
     reference_time: datetime | None = None
     # id списков, изменённых или открытых за ход — телеграм-слой покажет их с чекбоксами
@@ -195,6 +199,14 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
                       notes: str | None = None, time_guessed: bool = False,
                       remind_before_minutes: int | None = None) -> dict:
     rrule = _check_rrule(rrule)
+    if not ctx.asked_whose_task and (person := await _mentioned_person(ctx)):
+        # «Андрей должен позвать меня на кофе» модель записывала как дело пользователя. Запретить create_task
+        # при упоминании нельзя («позвонить Андрею» — дело самого пользователя), поэтому один раз переспрашиваем.
+        ctx.asked_whose_task = True
+        raise ToolError(
+            f"в сообщении упомянут близкий ({person}). Если это дело должен сделать {person} — вызови assign_task "
+            f"(title от его лица). Если дело самого пользователя (например, «позвонить {person}») — повтори create_task"
+        )
     date_only_due = bool(due_at) and ("T" not in due_at or due_at.split("T", 1)[1].startswith("00:00"))
     if ((day and not time) or date_only_due) and not ctx.asked_for_time:
         # Модели ленятся выбирать время сами — один раз просим подумать, потом сработает запасное время кода
@@ -433,6 +445,34 @@ async def _find_person(ctx: ToolContext, person: str):
     return found
 
 
+FIRST_PERSON = re.compile(r"(?<!\w)(меня|мне|мной|мною)(?!\w)", re.IGNORECASE)
+
+
+async def _mentioned_person(ctx: ToolContext) -> str | None:
+    """Имя близкого, упомянутого в сообщении пользователя (в любом падеже), или None."""
+    if ctx.user_text.startswith(FORWARD_MARK):
+        return None  # в пересланном чужом тексте имена — не повод переспрашивать
+    people = await ctx.repo.connections(ctx.user.id)
+    if not people:
+        return None
+    for word in re.findall(r"[^\W\d_]{3,}", ctx.user_text):
+        if found := find_person(people, word):
+            return found[0].alias
+    return None
+
+
+async def rename_person(ctx: ToolContext, person: str, new_name: str, who: str = "them") -> dict:
+    conn, peer = await _find_person(ctx, person)
+    new_name = new_name.strip()[:100]
+    if not new_name:
+        raise ToolError("пустое имя")
+    if who == "me":
+        await ctx.repo.set_alias(peer.id, ctx.user.id, new_name)
+        return {"now": f"{conn.alias} видит пользователя как «{new_name}»"}
+    await ctx.repo.set_alias(ctx.user.id, peer.id, new_name)
+    return {"now": f"пользователь видит {conn.alias} как «{new_name}»"}
+
+
 async def share_list(ctx: ToolContext, list: str, person: str) -> dict:
     lst = await _find_list(ctx, list)
     if lst.user_id != ctx.user.id:
@@ -445,9 +485,15 @@ async def share_list(ctx: ToolContext, list: str, person: str) -> dict:
 async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | None = None, day: str | None = None,
                       time: str | None = None, in_minutes: int | None = None, notes: str | None = None) -> dict:
     conn, peer = await _find_person(ctx, person)
+    if not ctx.asked_assign_wording and FIRST_PERSON.search(title):
+        # «позвать меня на кофе» у исполнителя читается так, будто звать надо его самого
+        ctx.asked_assign_wording = True
+        me = await ctx.repo.display_name(peer.id, ctx.user.id)
+        raise ToolError(f"title увидит {conn.alias}, поэтому «меня/мне/мной» замени на имя пользователя ({me}) "
+                        f"в нужном падеже и повтори assign_task")
     due, _ = _resolve_due(ctx, due_at, day, time, in_minutes)
-    # от кого — в заметке: видно и в карточке, и в напоминании, и в /tasks
-    who = f"Просьба от {ctx.user.name or 'близкого'}"
+    # от кого — в заметке (видно и в карточке, и в напоминании, и в /tasks); имя — как исполнитель зовёт пользователя
+    who = f"Просьба от {await ctx.repo.display_name(peer.id, ctx.user.id)}"
     task = await ctx.repo.create_assigned_task(peer.id, ctx.user.id, title=title, due_at=due,
                                                notes=f"{who}. {notes}" if notes else who)
     return {"assigned_to": conn.alias, "title": task.title,
@@ -768,6 +814,21 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                   "properties": {"list": _LIST, "person": _PERSON},
                   "required": ["list", "person"]}),
         share_list,
+    ),
+    "rename_person": (
+        ToolSpec(
+            "rename_person",
+            "Как называть близкого («зови Андрея Андрюша», who=them) или как близкий видит пользователя "
+            "(«пусть Андрей видит меня как Маша», «называй меня Маша для Андрея», who=me).",
+            {"type": "object",
+             "properties": {"person": _PERSON,
+                            "new_name": {"type": "string", "description": "Новое имя"},
+                            "who": {"type": "string", "enum": ["them", "me"],
+                                    "description": "them — переименовать близкого у пользователя; "
+                                                   "me — как близкий видит пользователя"}},
+             "required": ["person", "new_name"]},
+        ),
+        rename_person,
     ),
     "assign_task": (
         ToolSpec(
