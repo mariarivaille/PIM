@@ -124,3 +124,21 @@ async def test_gigachat_retries_network_errors_once(monkeypatch):
 
     provider._client.achat = flaky
     assert await provider._achat_with_retry(None) == "ok" and len(calls) == 2
+
+
+def test_looks_like_code():
+    from pim.agent.agent import looks_like_code
+    assert looks_like_code("Вот пример:\n```python\nprint(1)\n```")
+    assert looks_like_code("def bubble(a):\n    for i in range(len(a)):\n        pass")
+    assert looks_like_code("for (let i = 0; i < n; i++) {\n  swap(a, i)\n}")
+    assert not looks_like_code("Записал: позвонить маме, чт 10.01 15:00")
+    assert not looks_like_code("Вот твои задачи:\n1. Купить хлеб — 19:00\n2. Забрать посылку — 19:00")
+
+
+async def test_code_reply_is_replaced(repo, user):
+    from pim.agent.agent import OFF_TOPIC_REPLY
+    llm = ScriptedLLM([Message("assistant", "Конечно!\n```python\ndef sort(a):\n    return sorted(a)\n```")])
+    reply = await Agent(llm, repo, History(repo, 10)).handle(user, "Сортировка пузырьком")
+    assert reply.text == OFF_TOPIC_REPLY
+    # и в историю попадает отказ, а не код
+    assert (await History(repo, 10).get(user.id))[-1].content == OFF_TOPIC_REPLY

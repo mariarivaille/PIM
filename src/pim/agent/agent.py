@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -21,6 +22,20 @@ log = logging.getLogger(__name__)
 # GigaChat делает максимум один вызов инструмента за ответ — на «добавь 5 покупок» или разбор фото нужны шаги
 MAX_STEPS = 12
 MAX_FORWARD_CHARS = 4000
+
+OFF_TOPIC_REPLY = ("С этим я не помогаю — я веду твои дела, напоминания, списки и планы. "
+                   "Если из этого следует дело, скажи — запишу.")
+# Блок кода или хотя бы две строки, похожие на код
+_CODE_FENCE = re.compile(r"```")
+_CODE_LINE = re.compile(
+    r"^\s*(def |class |for .+ in .+:|while .+:|if .+:\s*$|import |from \w+ import |return |print\(|"
+    r"function |const |let |var |public |private |#include|for \(|\w+\s*=\s*\[|\}\s*$)",
+    re.MULTILINE,
+)
+
+
+def looks_like_code(text: str) -> bool:
+    return bool(_CODE_FENCE.search(text)) or len(_CODE_LINE.findall(text)) >= 2
 # Пометка фото в тексте сообщения: модель понимает, что к нему приложена картинка
 PHOTO_MARK = "[Фото"
 
@@ -176,6 +191,10 @@ class Agent:
             reply = "Не получилось довести дело до конца, попробуй переформулировать."
 
         reply = reply.strip() or "Готово."
+        if looks_like_code(reply):
+            # код Pim не пишет ни при каких условиях — промпту модель следует не всегда
+            log.info("user %s: replaced off-topic code reply", user.id)
+            reply = OFF_TOPIC_REPLY
         await self.history.add(user.id, Message("user", text), Message("assistant", reply))
         return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time, lists_touched=ctx.lists_touched,
                           plan=ctx.plan)
