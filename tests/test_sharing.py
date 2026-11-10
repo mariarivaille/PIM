@@ -46,12 +46,13 @@ def test_invite_code():
 
 
 def test_find_person():
-    def p(alias, name=None):
-        return SimpleNamespace(alias=alias), SimpleNamespace(name=name or alias)
+    def p(alias, name=None, nicknames=()):
+        return SimpleNamespace(alias=alias, nickname_list=list(nicknames)), SimpleNamespace(name=name or alias)
 
-    people = [p("Андрей Петров"), p("Мама", "Ольга"), p("Савва")]
+    people = [p("Андрей Петров", nicknames=["милый", "Андрюша"]), p("Мама", "Ольга"), p("Савва")]
     for name, expected in [("Андрей", "Андрей Петров"), ("Андрею", "Андрей Петров"), ("андрея петрова", "Андрей Петров"),
-                           ("маме", "Мама"), ("Ольге", "Мама"), ("Савве", "Савва"), ("Игорю", None)]:
+                           ("маме", "Мама"), ("Ольге", "Мама"), ("Савве", "Савва"), ("Игорю", None),
+                           ("милый", "Андрей Петров"), ("милому", "Андрей Петров"), ("Андрюше", "Андрей Петров")]:
         found = find_person(people, name)
         assert (found[0].alias if found else None) == expected, name
     assert find_person([p("Александр"), p("Александра")], "Алекс") is None  # неоднозначно
@@ -177,7 +178,8 @@ async def test_rename_and_display_names(repo, user, pair):
     m_ctx = ToolContext(repo, maria)
     await run_tool(m_ctx, "call_person", {"person": "Андрей", "new_name": "Андрюша"})
     await run_tool(m_ctx, "show_me_as", {"person": "Андрюше", "my_name": "Маша"})
-    assert [c.alias for c, _ in await repo.connections(maria.id)] == ["Андрюша"]
+    [(conn, _)] = await repo.connections(maria.id)
+    assert conn.alias == "Андрюша" and conn.nickname_list == ["Андрей Петров"]  # прежнее имя не потерялось
     assert await repo.display_name(andrey.id, maria.id) == "Маша"
     # поручение подписано так, как исполнитель зовёт поручившего
     await run_tool(m_ctx, "assign_task", {"person": "Андрюша", "title": "купить хлеб"})
@@ -239,3 +241,21 @@ def test_assign_reply_texts():
         "✅ Принять", "✖️ Отклонить", "✏️ Скорректировать"]
     text = adjusted_text("Андрей", "позвать Марию на кофе", "вт 10.11 13:00", task, TZ)
     assert "срок: вт 10.11 13:00 → без срока" in text and "было «" not in text
+
+
+async def test_several_names_for_a_person(repo, user, pair):
+    maria, andrey = pair
+    ctx = ToolContext(repo, maria)
+    assert (await run_tool(ctx, "add_person_name", {"person": "Андрей", "name": "милый"}))["already_known"] is False
+    assert (await run_tool(ctx, "add_person_name", {"person": "милый", "name": "зай"}))["added_name"] == "зай"
+    assert (await run_tool(ctx, "add_person_name", {"person": "Андрей", "name": "Милый"}))["already_known"] is True
+    [(conn, _)] = await repo.connections(maria.id)
+    assert conn.alias == "Андрей Петров" and conn.nickname_list == ["милый", "зай"]
+    # поручение по дополнительному имени уходит тому же человеку, подпись — основным
+    res = await run_tool(ctx, "assign_task", {"person": "милому", "title": "купить хлеб"})
+    assert res["assigned_to"] == "Андрей Петров"
+    assert (await run_tool(ctx, "remove_person_name", {"person": "Андрей", "name": "зай"}))["removed_name"] == "зай"
+    assert "error" in await run_tool(ctx, "remove_person_name", {"person": "Андрей", "name": "Андрей Петров"})
+    [(conn, _)] = await repo.connections(maria.id)
+    assert conn.nickname_list == ["милый"]
+    assert "Андрей Петров — ещё: милый" in people_text(await repo.connections(maria.id))

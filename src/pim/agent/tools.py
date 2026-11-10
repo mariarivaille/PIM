@@ -471,11 +471,27 @@ def _clean_name(name: str) -> str:
     return name
 
 
+async def add_person_name(ctx: ToolContext, person: str, name: str) -> dict:
+    conn, peer = await _find_person(ctx, person)
+    name = _clean_name(name)
+    added = await ctx.repo.add_nickname(ctx.user.id, peer.id, name)
+    return {"person": conn.alias, "added_name": name, "already_known": not added}
+
+
+async def remove_person_name(ctx: ToolContext, person: str, name: str) -> dict:
+    conn, peer = await _find_person(ctx, person)
+    if normalize(name) == normalize(conn.alias):
+        raise ToolError(f"«{name}» — основное имя; чтобы сменить его, используй call_person")
+    if not await ctx.repo.remove_nickname(ctx.user.id, peer.id, name):
+        raise ToolError(f"у {conn.alias} нет имени «{name}»")
+    return {"person": conn.alias, "removed_name": name}
+
+
 async def call_person(ctx: ToolContext, person: str, new_name: str) -> dict:
     conn, peer = await _find_person(ctx, person)
     name = _clean_name(new_name)
     await ctx.repo.set_alias(ctx.user.id, peer.id, name)
-    return {"now": f"у пользователя {conn.alias} теперь называется «{name}»"}
+    return {"now": f"основное имя теперь «{name}», прежнее «{conn.alias}» тоже остаётся"}
 
 
 async def show_me_as(ctx: ToolContext, person: str, my_name: str) -> dict:
@@ -827,14 +843,33 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                   "required": ["list", "person"]}),
         share_list,
     ),
+    "add_person_name": (
+        ToolSpec(
+            "add_person_name",
+            "Добавить близкому ещё одно имя, как его зовёт САМ ПОЛЬЗОВАТЕЛЬ: «я зову Андрея милый», "
+            "«милый — это Андрей», «Андрей — это ещё и Андрюша». Остальные имена сохраняются.",
+            {"type": "object",
+             "properties": {"person": _PERSON,
+                            "name": {"type": "string", "description": "Ещё одно имя близкого"}},
+             "required": ["person", "name"]},
+        ),
+        add_person_name,
+    ),
+    "remove_person_name": (
+        ToolSpec("remove_person_name", "Убрать одно из имён близкого: «больше не зови Андрея зай».",
+                 {"type": "object",
+                  "properties": {"person": _PERSON, "name": {"type": "string", "description": "Какое имя убрать"}},
+                  "required": ["person", "name"]}),
+        remove_person_name,
+    ),
     "call_person": (
         ToolSpec(
             "call_person",
-            "Как САМ ПОЛЬЗОВАТЕЛЬ называет близкого: «зови Андрея Андрюша», «милый — это Андрей», "
-            "«я зову Андрея милый». Меняет только то, как близкий подписан у пользователя.",
+            "Сменить ОСНОВНОЕ имя близкого — то, которым он подписан в сообщениях пользователю. Только по явной "
+            "просьбе: «переименуй Андрея в Андрюшу», «пусть Андрей везде будет Андрюша». Прежнее имя сохранится.",
             {"type": "object",
              "properties": {"person": _PERSON,
-                            "new_name": {"type": "string", "description": "Как пользователь хочет называть близкого"}},
+                            "new_name": {"type": "string", "description": "Новое основное имя"}},
              "required": ["person", "new_name"]},
         ),
         call_person,

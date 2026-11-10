@@ -19,7 +19,7 @@ def _same_word(a: str, b: str) -> bool:
 
 
 def _names(conn: Connection, peer: User) -> list[str]:
-    names = [normalize(conn.alias)]
+    names = [normalize(conn.alias), *(normalize(n) for n in conn.nickname_list)]
     if peer.name:
         names.append(normalize(peer.name))
     # «Андрей Петров» -> ещё и «андрей»

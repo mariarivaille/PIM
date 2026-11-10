@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from enum import StrEnum
 
@@ -223,6 +224,12 @@ class Connection(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     peer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     alias: Mapped[str] = mapped_column(String(100))
+    # Дополнительные имена (JSON-список): «милый», «Андрюша» — по ним тоже находим человека
+    nicknames: Mapped[str | None] = mapped_column(Text)
+
+    @property
+    def nickname_list(self) -> list[str]:
+        return json.loads(self.nicknames) if self.nicknames else []
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

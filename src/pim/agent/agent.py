@@ -130,7 +130,9 @@ class Agent:
         lists_block = "\n".join(f"«{lst.name}» — неотмеченных {open_}, всего {total}"
                                 + (" (общий)" if lst.id in shared else "")
                                 for lst, open_, total in await self._repo.user_lists(user.id))
-        people_block = "\n".join(f"- {conn.alias}" for conn, _ in await self._repo.connections(user.id))
+        people_block = "\n".join(
+            f"- {conn.alias}" + (f" (ещё зовёт: {', '.join(conn.nickname_list)})" if conn.nickname_list else "")
+            for conn, _ in await self._repo.connections(user.id))
         return Message("system", build_system_prompt(
             to_local(utcnow(), user.timezone), user.timezone, user.digest_time, tasks_block, memories_block,
             auto_memory=user.auto_memory, review_time=user.review_time, lists_block=lists_block,

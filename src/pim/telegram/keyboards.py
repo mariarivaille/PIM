@@ -185,7 +185,9 @@ def people_text(people: list, invite_hint: bool = True) -> str:
         return ("Пока ты ни с кем не связан(а) в Pim.\n"
                 "/invite — ссылка-приглашение: близкий откроет её, и вы сможете поручать друг другу дела "
                 "(«напомни Андрею купить хлеб») и вести общие списки («поделись покупками с Андреем»).")
-    lines = ["👥 <b>Близкие в Pim</b>"] + [f"• {html.escape(c.alias)}" for c, _ in people]
+    lines = ["👥 <b>Близкие в Pim</b>"] + [
+        f"• {html.escape(c.alias)}" + (f" — ещё: {html.escape(', '.join(c.nickname_list))}" if c.nickname_list else "")
+        for c, _ in people]
     lines.append("\nМожно поручать дела («напомни Андрею…») и делиться списками («поделись покупками с …»).")
     if invite_hint:
         lines.append("Пригласить ещё — /invite")

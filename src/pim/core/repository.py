@@ -1,3 +1,4 @@
+import json
 import secrets
 from datetime import datetime, timedelta
 
@@ -403,13 +404,40 @@ class Repository:
             user = await s.get(User, user_id)
             return (user.name if user else None) or "Близкий"
 
+    async def _connection(self, s: AsyncSession, user_id: int, peer_id: int) -> Connection | None:
+        return await s.scalar(select(Connection).where(Connection.user_id == user_id, Connection.peer_id == peer_id))
+
     async def set_alias(self, user_id: int, peer_id: int, alias: str) -> None:
-        """Как user_id видит peer_id."""
+        """Основное имя, под которым user_id видит peer_id. Прежнее основное не теряется — уходит в дополнительные."""
         async with self._sm() as s, s.begin():
-            conn = await s.scalar(select(Connection).where(Connection.user_id == user_id,
-                                                           Connection.peer_id == peer_id))
-            if conn:
+            conn = await self._connection(s, user_id, peer_id)
+            if conn and conn.alias != alias:
+                names = [n for n in conn.nickname_list if n.casefold() != alias.casefold()]
+                conn.nicknames = json.dumps([conn.alias, *names], ensure_ascii=False)
                 conn.alias = alias
+
+    async def add_nickname(self, user_id: int, peer_id: int, name: str) -> bool:
+        """Ещё одно имя близкого. False — такое уже есть."""
+        async with self._sm() as s, s.begin():
+            conn = await self._connection(s, user_id, peer_id)
+            if conn is None:
+                return False
+            known = [conn.alias, *conn.nickname_list]
+            if any(n.casefold() == name.casefold() for n in known):
+                return False
+            conn.nicknames = json.dumps([*conn.nickname_list, name], ensure_ascii=False)
+            return True
+
+    async def remove_nickname(self, user_id: int, peer_id: int, name: str) -> bool:
+        async with self._sm() as s, s.begin():
+            conn = await self._connection(s, user_id, peer_id)
+            if conn is None:
+                return False
+            left = [n for n in conn.nickname_list if n.casefold() != name.casefold()]
+            if len(left) == len(conn.nickname_list):
+                return False
+            conn.nicknames = json.dumps(left, ensure_ascii=False) if left else None
+            return True
 
     async def create_assigned_task(self, assignee_id: int, assigned_by: int, title: str,
                                    due_at: datetime | None = None, notes: str | None = None) -> Task:
