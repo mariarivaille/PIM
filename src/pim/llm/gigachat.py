@@ -1,6 +1,10 @@
+import asyncio
 import hashlib
 import logging
+import ssl
 import uuid
+
+import httpx
 
 from gigachat import GigaChat
 from gigachat.models import Chat, Function, FunctionCall, Messages, MessagesRole
@@ -8,6 +12,8 @@ from gigachat.models import Chat, Function, FunctionCall, Messages, MessagesRole
 from pim.llm.base import Image, Message, ToolCall, ToolSpec
 
 log = logging.getLogger(__name__)
+
+NETWORK_RETRIES = 1
 
 _ROLES = {
     "system": MessagesRole.SYSTEM,
@@ -64,6 +70,17 @@ class GigaChatProvider:
             except Exception:
                 log.warning("failed to delete uploaded file %s", file_id, exc_info=True)
 
+    async def _achat_with_retry(self, payload: Chat):
+        """Сетевые сбои (обрыв SSL, сброс соединения) SDK не повторяет — повторяем сами, один раз."""
+        for attempt in range(NETWORK_RETRIES + 1):
+            try:
+                return await self._client.achat(payload)
+            except (httpx.TransportError, ssl.SSLError) as e:
+                if attempt == NETWORK_RETRIES:
+                    raise
+                log.warning("GigaChat network error, retrying: %s", e)
+                await asyncio.sleep(1)
+
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> Message:
         payload = Chat(
             messages=[self._to_api(m, await self._attachments(m.images) if m.images else None) for m in messages],
@@ -75,7 +92,7 @@ class GigaChatProvider:
             function_call="auto" if tools else None,
             temperature=self._temperature,
         )
-        resp = await self._client.achat(payload)
+        resp = await self._achat_with_retry(payload)
         msg = resp.choices[0].message
         calls = []
         if msg.function_call:

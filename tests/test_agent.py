@@ -104,3 +104,23 @@ def test_gigachat_message_conversion():
 
     result = GigaChatProvider._to_api(Message("tool", '{"tasks": []}', tool_call_id="x", name="list_tasks"))
     assert result.role == "function" and result.name == "list_tasks"
+
+
+async def test_gigachat_retries_network_errors_once(monkeypatch):
+    import ssl
+
+    async def no_sleep(*_):
+        return None
+
+    monkeypatch.setattr("pim.llm.gigachat.asyncio.sleep", no_sleep)
+    provider = GigaChatProvider(credentials="x", scope="s", model="m", verify_ssl=False)
+    calls = []
+
+    async def flaky(payload):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ssl.SSLError("bad record mac")
+        return "ok"
+
+    provider._client.achat = flaky
+    assert await provider._achat_with_retry(None) == "ok" and len(calls) == 2

@@ -1,7 +1,9 @@
+import logging
+
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, TelegramObject
+from aiogram.types import BotCommand, Message, TelegramObject
 
 from pim.agent.agent import Agent
 from pim.config import Settings
@@ -29,6 +31,9 @@ from pim.telegram.keyboards import (
 )
 
 
+log = logging.getLogger(__name__)
+
+
 class AllowlistMiddleware(BaseMiddleware):
     """Пускает: тех, кто в ALLOWED_USER_IDS; уже присоединившихся по приглашению; и пришедших с живым приглашением."""
 
@@ -38,8 +43,10 @@ class AllowlistMiddleware(BaseMiddleware):
 
     async def __call__(self, handler, event: TelegramObject, data: dict):
         user = data.get("event_from_user")
+        _log_incoming(event, user)
         if not self._allowed or (user is not None and await self._is_allowed(user.id, event)):
             return await handler(event, data)
+        log.info("blocked update from %s (not in allowlist, no invite)", user.id if user else None)
         return None
 
     async def _is_allowed(self, user_id: int, event: TelegramObject) -> bool:
@@ -108,6 +115,15 @@ async def setup_commands(bot: Bot) -> None:
     Имя, about и description бота задаются вручную в @BotFather и здесь не трогаются.
     """
     await bot.set_my_commands(COMMANDS)
+
+
+def _log_incoming(event: TelegramObject, user) -> None:
+    """Что пришло от Telegram — без текста сообщения, только тип: для разбора «бот не реагирует»."""
+    if isinstance(event, Message):
+        origin = event.forward_origin
+        log.info("incoming message from %s: type=%s forwarded=%s has_text=%s",
+                 user.id if user else None, event.content_type, origin.type if origin else None,
+                 bool(event.text or event.caption))
 
 
 def make_bot(settings: Settings) -> Bot:
