@@ -58,6 +58,8 @@ class ToolContext:
     adjust_task: Task | None = None
     # от какого момента считать «завтра», «через час»; None = сейчас (для пересланных — дата отправки)
     reference_time: datetime | None = None
+    # день/время в текущем вызове взяты из текста пересланного (а не из подписи пользователя) — считать от reference_time
+    date_from_forwarded: bool = True
     # id списков, изменённых или открытых за ход — телеграм-слой покажет их с чекбоксами
     lists_touched: list[int] = field(default_factory=list)
     # привычки по времени (learning/timing.py) — для времени по умолчанию
@@ -83,12 +85,18 @@ AFFIRMATIVE = re.compile(r"^\s*(да|ага|угу|давай|конечно|о�
 
 # Пометка, с которой пересланное сообщение попадает к модели и в историю (её же понимает рефлексия)
 FORWARD_MARK = "[Пересланное сообщение"
+# Подпись пользователя к пересланному — его собственные слова
+COMMENT_MARK = "[Комментарий пользователя к пересланному]"
 
 
 def memory_requested(ctx: "ToolContext") -> bool:
-    if ctx.user_text.startswith(FORWARD_MARK):
-        return False  # «запомни» в чужом пересланном сообщении — не просьба пользователя
-    if EXPLICIT_MEMORY_REQUEST.search(ctx.user_text):
+    text = ctx.user_text
+    if text.startswith(FORWARD_MARK):
+        # «запомни» в чужом пересланном — не просьба пользователя; в его собственной подписи — просьба
+        if COMMENT_MARK not in text:
+            return False
+        text = text.split(COMMENT_MARK, 1)[1]
+    if EXPLICIT_MEMORY_REQUEST.search(text):
         return True
     return MEMORY_OFFER.lower() in ctx.prev_assistant.lower() and bool(AFFIRMATIVE.match(ctx.user_text))
 
@@ -115,7 +123,8 @@ def _parse_due(ctx: ToolContext, value: str) -> tuple[datetime, bool]:
     except ValueError as e:
         raise ToolError(f"due_at должен быть ISO 8601, например 2026-10-30T15:00, получено {value!r}") from e
     # Только дата или ровно полночь — модель не выбрала время: ставим как «просто день», а не будим в 00:00
-    defaulted = "T" not in value or (local.hour, local.minute, local.second) == (0, 0, 0)
+    # 23:59 — «до конца дня» из дедлайнов: напоминать ночью бессмысленно, это тоже «время не названо»
+    defaulted = "T" not in value or (local.hour, local.minute) in ((0, 0), (23, 59))
     if defaulted:
         default = _default_time(ctx, weekend=local.weekday() >= 5)
         local = local.replace(hour=default.hour, minute=default.minute, second=0)
@@ -128,6 +137,27 @@ def _default_time(ctx: ToolContext, weekend: bool) -> dt_time:
     return dt_time(hour, 0) if hour is not None else DEFAULT_TIME
 
 
+# Как день из DAY_KEYWORDS звучит в тексте пользователя
+_DAY_WORDS = {
+    "today": "сегодня", "tomorrow": "завтра", "day_after_tomorrow": "послезавтра", "mon": "понедельник",
+    "tue": "вторник", "wed": "сред", "thu": "четверг", "fri": "пятниц", "sat": "суббот", "sun": "воскресен",
+}
+
+
+def _said_in_comment(ctx: ToolContext, day: str | None, in_minutes: int | None) -> bool:
+    """День («в пятницу») или «через …» прозвучали в подписи пользователя к пересланному."""
+    if COMMENT_MARK not in ctx.user_text:
+        return False
+    comment = ctx.user_text.split(COMMENT_MARK, 1)[1].casefold()
+    if in_minutes:
+        return "через" in comment
+    word = _DAY_WORDS.get(day or "")
+    # «послезавтра» содержит «завтра» — его проверяем отдельно
+    if word == "завтра":
+        return "завтра" in comment.replace("послезавтра", "")
+    return bool(word) and word in comment
+
+
 def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: str | None,
                  in_minutes: int | None, time_guessed: bool = False) -> tuple[datetime | None, bool]:
     """Время напоминания из того, что дала модель. Даты считает код, а не LLM.
@@ -137,7 +167,10 @@ def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: st
     сообщения это момент его отправки, а не «сейчас».
     """
     now = utcnow()
-    base = ctx.reference_time or now
+    # от даты пересланного — только даты из его текста; слова пользователя в подписи — от «сейчас».
+    # Модель флаг date_from_forwarded часто не ставит, поэтому проверяем и сами: есть ли этот день в подписи
+    from_comment = not ctx.date_from_forwarded or _said_in_comment(ctx, day, in_minutes)
+    base = ctx.reference_time if ctx.reference_time and not from_comment else now
     if in_minutes:
         return base + timedelta(minutes=int(in_minutes)), False
     if due_at:
@@ -203,7 +236,8 @@ async def _get(ctx: ToolContext, task_id: int) -> Task:
 async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, day: str | None = None,
                       time: str | None = None, in_minutes: int | None = None, rrule: str | None = None,
                       notes: str | None = None, time_guessed: bool = False,
-                      remind_before_minutes: int | None = None) -> dict:
+                      remind_before_minutes: int | None = None, date_from_forwarded: bool = True) -> dict:
+    ctx.date_from_forwarded = date_from_forwarded
     rrule = _check_rrule(rrule)
     if not ctx.asked_whose_task and (person := await _mentioned_person(ctx)):
         # «Андрей должен позвать меня на кофе» модель записывала как дело пользователя. Запретить create_task
@@ -524,7 +558,9 @@ async def share_list(ctx: ToolContext, list: str, person: str) -> dict:
 
 
 async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | None = None, day: str | None = None,
-                      time: str | None = None, in_minutes: int | None = None, notes: str | None = None) -> dict:
+                      time: str | None = None, in_minutes: int | None = None, notes: str | None = None,
+                      date_from_forwarded: bool = True) -> dict:
+    ctx.date_from_forwarded = date_from_forwarded
     conn, peer = await _find_person(ctx, person)
     if not ctx.asked_assign_wording and FIRST_PERSON.search(title):
         # «позвать меня на кофе» у исполнителя читается так, будто звать надо его самого
@@ -649,6 +685,11 @@ _DAY = {
                    "(ближайший будущий). Дату по дню недели НЕ вычисляй — передай день сюда.",
 }
 _TIME = {"type": "string", "description": "Время напоминания HH:MM, например 19:00"}
+_FROM_FORWARDED = {
+    "type": "boolean",
+    "description": "Только для пересланных сообщений: true — день/время взяты из текста пересланного («завтра» в нём "
+                   "считается от даты отправки); false — из подписи самого пользователя (считается от «сейчас»)",
+}
 _TIME_GUESSED = {
     "type": "boolean",
     "description": "true, если пользователь НЕ называл время и ты выбрал его сам по смыслу дела",
@@ -700,6 +741,7 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "due_at": _DUE,
                     "rrule": _RRULE,
                     "notes": {"type": "string", "description": "Доп. детали, если есть"},
+                    "date_from_forwarded": _FROM_FORWARDED,
                     "remind_before_minutes": {
                         "type": "integer",
                         "description": "Если просят напомнить заранее («за день до», «за час»): время СОБЫТИЯ передай "
@@ -916,6 +958,7 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "in_minutes": _IN_MINUTES,
                     "due_at": _DUE,
                     "notes": {"type": "string", "description": "Детали, если есть"},
+                    "date_from_forwarded": _FROM_FORWARDED,
                 },
                 "required": ["person", "title"],
             },

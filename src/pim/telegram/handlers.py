@@ -7,7 +7,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.chat_action import ChatActionSender
 
-from pim.agent.agent import Agent
+from pim.agent.agent import Agent, ForwardedPart
 from pim.config import Settings
 from pim.core.models import TaskStatus, utcnow
 from pim.core.repository import Repository
@@ -21,6 +21,7 @@ from pim.reminders.dates import CONGRATS_OFFSET, GIFT_OFFSET, UpcomingDate, remi
 from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpone_to_tomorrow
 from pim.stt.base import Transcriber
 from pim.telegram.bot_helpers import INVITE_PREFIX, invite_code
+from pim.telegram.burst import Burster, Incoming
 from pim.telegram.keyboards import (
     AssignAction,
     DateAction,
@@ -274,6 +275,47 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         user = await ensure_user(message)
         await message.answer(memory_list(await repo.list_memories(user.id), user.timezone, user.auto_memory))
 
+    async def flush(user_id: int, items: list[Incoming]):
+        """Пачка сообщений, пришедших подряд (см. telegram/burst.py)."""
+        user = await repo.get_user(user_id)
+        first = items[0].message
+        forwards = [i for i in items if i.forwarded]
+        if not forwards:
+            for item in items:  # без пересланного — как раньше, по одному
+                if item.images:
+                    await process_photo(item.message, user, item.images, item.text)
+                else:
+                    await process(item.message, user, item.text)
+                user = await repo.get_user(user_id)
+            return
+        # пересланное + подпись пользователя (и его собственные фото, если были) — одним ходом
+        parts = [ForwardedPart(text=i.text, sender=forward_sender(i.message.forward_origin, i.message),
+                               sent_at=i.message.forward_origin.date, images=i.images) for i in forwards]
+        own = [i for i in items if not i.forwarded]
+        parts[0].images = [img for i in own for img in i.images] + parts[0].images
+        comment = "\n".join(i.text for i in own if i.text)
+        async with ChatActionSender.typing(bot=first.bot, chat_id=first.chat.id):
+            try:
+                reply = await agent.handle_forwarded_batch(user, parts, comment)
+            except Exception:
+                log.exception("forwarded batch failed")
+                await first.answer("Что-то пошло не так с пересланным, попробуй ещё раз.")
+                return
+        await send_reply(first, user, reply)
+
+    burster = Burster(flush)
+
+    async def process_photo(message: Message, user, images: list[Image], caption: str):
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            try:
+                reply = await agent.handle_photo(user, images, caption)
+            except Exception:
+                log.exception("photo processing failed")
+                await message.answer("Не получилось разобрать фото. Возможно, текущая модель не умеет "
+                                     "работать с картинками — напиши, что на нём, текстом.")
+                return
+        await send_reply(message, user, reply)
+
     @router.message(F.photo | F.document.mime_type.startswith("image/"))
     async def on_photo(message: Message):
         # регистрируется раньше on_text: у фото с подписью есть caption, но картинку терять нельзя
@@ -282,30 +324,16 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             await message.answer("Картинка слишком большая — пришли её как фото, а не файлом.")
             return
         user = await ensure_user(message)
-        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            data = (await message.bot.download(media)).getvalue()
-            mime = "image/jpeg" if message.photo else (message.document.mime_type or "image/jpeg")
-            images = [Image(data=data, mime=mime)]
-            caption = message.caption or ""
-            try:
-                if origin := message.forward_origin:
-                    reply = await agent.handle_forwarded(user, caption, forward_sender(origin, message),
-                                                         origin.date, images=images)
-                else:
-                    reply = await agent.handle_photo(user, images, caption)
-            except Exception:
-                log.exception("photo processing failed")
-                await message.answer("Не получилось разобрать фото. Возможно, текущая модель не умеет "
-                                     "работать с картинками — напиши, что на нём, текстом.")
-                return
-            await send_reply(message, user, reply)
+        data = (await message.bot.download(media)).getvalue()
+        mime = "image/jpeg" if message.photo else (message.document.mime_type or "image/jpeg")
+        burster.add(user.id, Incoming(message, message.caption or "", [Image(data=data, mime=mime)],
+                                      forwarded=message.forward_origin is not None))
 
     @router.message(F.text | F.caption)
     async def on_text(message: Message):
-        # подпись к фото/файлу обрабатываем как текст — так работают и пересланные посты с картинкой
         user = await ensure_user(message)
-        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            await process(message, user, message.text or message.caption)
+        burster.add(user.id, Incoming(message, message.text or message.caption,
+                                      forwarded=message.forward_origin is not None))
 
     @router.message(F.voice | F.audio | F.video_note)
     async def on_voice(message: Message):
@@ -325,11 +353,11 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
                 log.exception("transcription failed")
                 await message.answer("Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")
                 return
-            if not text:
-                await message.answer("Не расслышал, повтори, пожалуйста.")
-                return
-            await message.answer(f"🎙 <i>{html.escape(text)}</i>")
-            await process(message, user, text)
+        if not text:
+            await message.answer("Не расслышал, повтори, пожалуйста.")
+            return
+        await message.answer(f"🎙 <i>{html.escape(text)}</i>")
+        burster.add(user.id, Incoming(message, text, forwarded=message.forward_origin is not None))
 
     @router.message(F.forward_origin)
     async def on_forwarded_without_text(message: Message):
@@ -341,10 +369,11 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             await adjust_assignment(message, user, text)
             return
         try:
-            if origin := message.forward_origin:
-                reply = await agent.handle_forwarded(user, text, forward_sender(origin, message), origin.date)
-            else:
-                reply = await agent.handle(user, text)
+            async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+                if origin := message.forward_origin:
+                    reply = await agent.handle_forwarded(user, text, forward_sender(origin, message), origin.date)
+                else:
+                    reply = await agent.handle(user, text)
         except Exception:
             log.exception("agent failed")
             await message.answer("Что-то пошло не так с моделью, попробуй ещё раз.")

@@ -9,7 +9,7 @@ from typing import Callable
 
 from pim.agent.commands import parse_delete_facts
 from pim.agent.prompts import build_system_prompt
-from pim.agent.tools import FORWARD_MARK, TOOLS, ToolContext, memory_view, run_tool, task_view
+from pim.agent.tools import COMMENT_MARK, FORWARD_MARK, TOOLS, ToolContext, memory_view, run_tool, task_view
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import WEEKDAYS_RU, format_local, to_local
@@ -22,6 +22,15 @@ log = logging.getLogger(__name__)
 # GigaChat делает максимум один вызов инструмента за ответ — на «добавь 5 покупок» или разбор фото нужны шаги
 MAX_STEPS = 12
 MAX_FORWARD_CHARS = 4000
+MAX_IMAGES = 4
+
+
+@dataclass
+class ForwardedPart:
+    text: str
+    sender: str
+    sent_at: datetime
+    images: list[Image] = field(default_factory=list)
 
 OFF_TOPIC_REPLY = ("С этим я не помогаю — я веду твои дела, напоминания, списки и планы. "
                    "Если из этого следует дело, скажи — запишу.")
@@ -109,17 +118,29 @@ class Agent:
 
     async def handle_forwarded(self, user: User, text: str, sender: str, sent_at: datetime,
                                images: list[Image] | None = None) -> AgentReply:
-        """Пересланное сообщение: чужие слова, из которых надо достать дела пользователя.
+        return await self.handle_forwarded_batch(user, [ForwardedPart(text, sender, sent_at, images or [])])
 
-        Относительные даты в нём («завтра», «в пятницу») считаются от момента отправки, а не от «сейчас».
+    async def handle_forwarded_batch(self, user: User, parts: list[ForwardedPart], comment: str = "") -> AgentReply:
+        """Пересланное (одно или пачкой) и подпись пользователя к нему — одним ходом.
+
+        Чужие слова, из которых надо достать дела пользователя; подпись говорит, что с ними сделать.
+        Относительные даты («завтра», «в пятницу») считаются от момента отправки, а не от «сейчас».
         """
-        local = to_local(sent_at, user.timezone)
-        header = f"{FORWARD_MARK} от {sender}, отправлено {WEEKDAYS_RU[local.weekday()]} {local:%d.%m.%Y %H:%M}]"
-        if images:
-            header += " " + PHOTO_MARK + "]"
-        wrapped = f"{header}\n{text[:MAX_FORWARD_CHARS]}"
+        blocks, images = [], []
+        for part in parts:
+            local = to_local(part.sent_at, user.timezone)
+            header = (f"{FORWARD_MARK} от {part.sender}, отправлено "
+                      f"{WEEKDAYS_RU[local.weekday()]} {local:%d.%m.%Y %H:%M}]")
+            if part.images:
+                header += " " + PHOTO_MARK + "]"
+            blocks.append(f"{header}\n{part.text[:MAX_FORWARD_CHARS]}")
+            images += part.images
+        if comment.strip():
+            blocks.append(f"{COMMENT_MARK} {comment.strip()}")
+        reference = min(p.sent_at for p in parts)
         async with self._locks[user.id]:
-            return await self._handle(user, wrapped, reference_time=sent_at, images=images)
+            return await self._handle(user, "\n\n".join(blocks), reference_time=reference,
+                                      images=images[:MAX_IMAGES] or None)
 
     async def handle_adjustment(self, user: User, task: Task, text: str) -> AgentReply:
         """После «✏️ Скорректировать»: слова пользователя меняют именно это поручение."""

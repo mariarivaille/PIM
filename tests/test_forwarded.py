@@ -80,3 +80,30 @@ async def test_forwarded_remember_error_forbids_claiming(repo, user):
     ctx = ToolContext(repo, user, user_text="[Пересланное сообщение от Ольга, отправлено пн]\nзапомни номер")
     res = await run_tool(ctx, "remember", {"content": "номер Ольги"})
     assert "НЕ говори, что запомнил" in res["error"]
+
+
+async def test_dates_from_users_comment_count_from_now(repo, user):
+    week_ago = utcnow() - timedelta(days=7)
+    ctx = ToolContext(repo, user, reference_time=week_ago)
+    await run_tool(ctx, "create_task", {"title": "из поста", "day": "tomorrow", "time": "15:00"})
+    await run_tool(ctx, "create_task", {"title": "из подписи", "day": "tomorrow", "time": "15:00",
+                                        "date_from_forwarded": False})
+    from_post, from_comment = ctx.touched
+    assert to_local(from_post.due_at, TZ).date() == to_local(week_ago, TZ).date() + timedelta(days=1)
+    assert to_local(from_comment.due_at, TZ).date() == to_local(utcnow(), TZ).date() + timedelta(days=1)
+
+
+async def test_comment_day_detected_without_model_flag(repo, user):
+    week_ago = utcnow() - timedelta(days=7)
+    text = ("[Пересланное сообщение от Reddit, отправлено вт]\nНабор открыт до 22 ноября\n\n"
+            "[Комментарий пользователя к пересланному] напомни в пятницу податься")
+    ctx = ToolContext(repo, user, reference_time=week_ago, user_text=text)
+    await run_tool(ctx, "create_task", {"title": "податься", "day": "fri", "time": "19:00"})
+    due = to_local(ctx.touched[0].due_at, TZ)
+    assert due.weekday() == 4 and due > to_local(utcnow(), TZ)  # ближайшая пятница, а не неделю назад
+
+
+async def test_deadline_2359_is_not_a_night_reminder(repo, user):
+    ctx = ToolContext(repo, user, asked_for_time=True)
+    await run_tool(ctx, "create_task", {"title": "подать заявку", "due_at": "2030-11-22T23:59"})
+    assert to_local(ctx.touched[0].due_at, TZ).hour == 10
