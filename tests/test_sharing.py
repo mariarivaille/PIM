@@ -175,8 +175,8 @@ async def test_rename_and_display_names(repo, user, pair):
     maria, andrey = pair
     assert await repo.display_name(andrey.id, maria.id) == "Мария"
     m_ctx = ToolContext(repo, maria)
-    await run_tool(m_ctx, "rename_person", {"person": "Андрей", "new_name": "Андрюша"})
-    await run_tool(m_ctx, "rename_person", {"person": "Андрюше", "new_name": "Маша", "who": "me"})
+    await run_tool(m_ctx, "call_person", {"person": "Андрей", "new_name": "Андрюша"})
+    await run_tool(m_ctx, "show_me_as", {"person": "Андрюше", "my_name": "Маша"})
     assert [c.alias for c, _ in await repo.connections(maria.id)] == ["Андрюша"]
     assert await repo.display_name(andrey.id, maria.id) == "Маша"
     # поручение подписано так, как исполнитель зовёт поручившего

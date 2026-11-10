@@ -461,16 +461,28 @@ async def _mentioned_person(ctx: ToolContext) -> str | None:
     return None
 
 
-async def rename_person(ctx: ToolContext, person: str, new_name: str, who: str = "them") -> dict:
-    conn, peer = await _find_person(ctx, person)
-    new_name = new_name.strip()[:100]
-    if not new_name:
+# Два отдельных инструмента, а не один с параметром «кого»: с ним модель путала направление
+# («милый (я так зову Андрея)» превращалось в «Андрей видит меня как милый»).
+
+def _clean_name(name: str) -> str:
+    name = name.strip()[:100]
+    if not name:
         raise ToolError("пустое имя")
-    if who == "me":
-        await ctx.repo.set_alias(peer.id, ctx.user.id, new_name)
-        return {"now": f"{conn.alias} видит пользователя как «{new_name}»"}
-    await ctx.repo.set_alias(ctx.user.id, peer.id, new_name)
-    return {"now": f"пользователь видит {conn.alias} как «{new_name}»"}
+    return name
+
+
+async def call_person(ctx: ToolContext, person: str, new_name: str) -> dict:
+    conn, peer = await _find_person(ctx, person)
+    name = _clean_name(new_name)
+    await ctx.repo.set_alias(ctx.user.id, peer.id, name)
+    return {"now": f"у пользователя {conn.alias} теперь называется «{name}»"}
+
+
+async def show_me_as(ctx: ToolContext, person: str, my_name: str) -> dict:
+    conn, peer = await _find_person(ctx, person)
+    name = _clean_name(my_name)
+    await ctx.repo.set_alias(peer.id, ctx.user.id, name)
+    return {"now": f"{conn.alias} теперь видит пользователя как «{name}»"}
 
 
 async def share_list(ctx: ToolContext, list: str, person: str) -> dict:
@@ -815,20 +827,29 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                   "required": ["list", "person"]}),
         share_list,
     ),
-    "rename_person": (
+    "call_person": (
         ToolSpec(
-            "rename_person",
-            "Как называть близкого («зови Андрея Андрюша», who=them) или как близкий видит пользователя "
-            "(«пусть Андрей видит меня как Маша», «называй меня Маша для Андрея», who=me).",
+            "call_person",
+            "Как САМ ПОЛЬЗОВАТЕЛЬ называет близкого: «зови Андрея Андрюша», «милый — это Андрей», "
+            "«я зову Андрея милый». Меняет только то, как близкий подписан у пользователя.",
             {"type": "object",
              "properties": {"person": _PERSON,
-                            "new_name": {"type": "string", "description": "Новое имя"},
-                            "who": {"type": "string", "enum": ["them", "me"],
-                                    "description": "them — переименовать близкого у пользователя; "
-                                                   "me — как близкий видит пользователя"}},
+                            "new_name": {"type": "string", "description": "Как пользователь хочет называть близкого"}},
              "required": ["person", "new_name"]},
         ),
-        rename_person,
+        call_person,
+    ),
+    "show_me_as": (
+        ToolSpec(
+            "show_me_as",
+            "Как БЛИЗКИЙ будет видеть ПОЛЬЗОВАТЕЛЯ в своих сообщениях: «пусть Андрей видит меня как Маша», "
+            "«для Андрея я Маша». Только если пользователь говорит о своём имени.",
+            {"type": "object",
+             "properties": {"person": _PERSON,
+                            "my_name": {"type": "string", "description": "Имя пользователя, которое увидит близкий"}},
+             "required": ["person", "my_name"]},
+        ),
+        show_me_as,
     ),
     "assign_task": (
         ToolSpec(
