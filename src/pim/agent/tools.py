@@ -23,6 +23,7 @@ from pim.core.timeutils import (
     nearest_reasonable_time,
     parse_local,
     resolve_day_time,
+    strip_time_words,
     to_local,
 )
 from pim.learning.timing import TimeProfile
@@ -231,6 +232,8 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         due = event_at - timedelta(minutes=int(remind_before_minutes))
         when = f"Само событие: {format_local(event_at, ctx.user.timezone)}"
         notes = f"{when}. {notes}" if notes else when
+    if due:
+        title = strip_time_words(title)  # время — в сроке, в названии оно устареет при первом переносе
     task = await ctx.repo.create_task(ctx.user.id, title=title, due_at=due, rrule=rrule, notes=notes)
     if due and due <= utcnow():
         # срок уже прошёл (обычно из пересланного сообщения): дело видно в сводке как просроченное,
@@ -280,6 +283,11 @@ async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, 
         fields["rrule"] = _check_rrule(rrule)
     if notes is not None:
         fields["notes"] = notes or None
+    if fields.get("title") or "due_at" in fields:
+        # «обнять в обед», перенесённое на 20:00, — противоречие: время в названии убираем
+        cleaned = strip_time_words(fields.get("title") or task.title)
+        if cleaned != task.title:
+            fields["title"] = cleaned
     task = await ctx.repo.update_task(task.user_id, int(task_id), **fields)
     ctx.touched.append(task)
     return {"updated": _due_view(ctx, task, auto)}
@@ -525,6 +533,8 @@ async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | N
         raise ToolError(f"title увидит {conn.alias}, поэтому «меня/мне/мной» замени на имя пользователя ({me}) "
                         f"в нужном падеже и повтори assign_task")
     due, _ = _resolve_due(ctx, due_at, day, time, in_minutes)
+    if due:
+        title = strip_time_words(title)
     # от кого — в заметке (видно и в карточке, и в напоминании, и в /tasks); имя — как исполнитель зовёт пользователя
     who = f"Просьба от {await ctx.repo.display_name(peer.id, ctx.user.id)}"
     task = await ctx.repo.create_assigned_task(peer.id, ctx.user.id, title=title, due_at=due,

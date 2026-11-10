@@ -122,3 +122,26 @@ async def test_remind_before_event(repo, user):
     assert to_local(task.due_at, TZ).strftime("%d.%m %H:%M") == "12.11 18:00"
     assert task.notes.startswith("Само событие: ") and "13.11 18:00" in task.notes and task.notes.endswith("каб. 214")
     assert res["created"]["remind_at"].endswith("12.11 18:00") and res["created"]["event_at"].endswith("13.11 18:00")
+
+
+def test_strip_time_words():
+    from pim.core.timeutils import strip_time_words as f
+    assert f("обнять милую в обед") == "обнять милую"
+    assert f("позвонить маме завтра в 19") == "позвонить маме"
+    assert f("встать в 7 утра на пробежку") == "встать на пробежку"
+    assert f("сдать отчёт к 10:00") == "сдать отчёт"
+    assert f("встреча в 2 этаже") == "встреча в 2 этаже"  # не время
+    assert f("пообедать с Андреем") == "пообедать с Андреем"
+    assert f("в обед") == "в обед"  # пусто не оставляем
+
+
+async def test_title_has_no_time_after_create_or_move(repo, user):
+    ctx = ToolContext(repo, user)
+    res = await run_tool(ctx, "create_task", {"title": "обнять милую в обед", "day": "today", "time": "13:00"})
+    assert res["created"]["title"] == "обнять милую"
+    no_due = await run_tool(ctx, "create_task", {"title": "подумать про отпуск в выходные"})
+    assert no_due["created"]["title"] == "подумать про отпуск в выходные"  # без срока время — единственное место
+    # перенос дела, в названии которого осталось время, — название чистится
+    task = await repo.create_task(user.id, "позвонить маме вечером", due_at=parse_local("2030-01-10T19:00", TZ))
+    res = await run_tool(ctx, "update_task", {"task_id": task.id, "time": "10:00"})
+    assert res["updated"]["title"] == "позвонить маме"

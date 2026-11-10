@@ -1,4 +1,5 @@
 import math
+import re
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -97,3 +98,29 @@ def next_occurrence(rule: str, prev: datetime, tz: str, after: datetime) -> date
     if nxt is None:
         return None
     return nxt.replace(tzinfo=ZoneInfo(tz)).astimezone(timezone.utc)
+
+
+# Указания времени в названии дела: время живёт в due_at, а в названии оно устаревает при переносе
+# («обнять в обед», а дело уже на 20:00)
+_WEEKDAYS_ACC = r"понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье"
+_TIME_PHRASES = re.compile(
+    r"(?<!\w)(?:"
+    r"сегодня|завтра|послезавтра|"
+    r"с утра|утром|днём|днем|вечером|ночью|"
+    r"в обед|на обеде|после обеда|перед обедом|в обеденный перерыв|"
+    r"на выходных|в выходные|"
+    rf"(?:в|во|до|к|после) (?:{_WEEKDAYS_ACC})|"
+    # «в 19:00», «в 7 утра», «к 10» в конце фразы — время; «в 2 этаже» — нет
+    r"(?:в|к|до|после) \d{1,2}(?:[:.]\d{2}(?: (?:часов|часа|час|утра|вечера|дня|ночи))?"
+    r"| (?:часов|часа|час|утра|вечера|дня|ночи)|(?=\s*(?:$|[,.!?;])))|"
+    r"через (?:полчаса|час|пару часов|\d+ (?:минут[уы]?|час(?:а|ов)?|дн(?:я|ей)|день))"
+    r")(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def strip_time_words(title: str) -> str:
+    """Убирает из названия дела слова о времени и дне; если ничего не осталось — возвращает как было."""
+    cleaned = _TIME_PHRASES.sub(" ", title)
+    cleaned = re.sub(r"\s+([,.!?])", r"\1", re.sub(r"\s{2,}", " ", cleaned)).strip(" ,.-—")
+    return cleaned if len(cleaned) >= 2 else title
