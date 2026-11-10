@@ -9,7 +9,7 @@ from aiogram.utils.chat_action import ChatActionSender
 
 from pim.agent.agent import Agent
 from pim.config import Settings
-from pim.core.models import utcnow
+from pim.core.models import TaskStatus, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import format_local, to_local
 from pim.learning.timing import load_profile
@@ -21,6 +21,7 @@ from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpon
 from pim.stt.base import Transcriber
 from pim.telegram.bot_helpers import INVITE_PREFIX, invite_code
 from pim.telegram.keyboards import (
+    AssignAction,
     DateAction,
     ListAction,
     PlanAction,
@@ -28,6 +29,8 @@ from pim.telegram.keyboards import (
     TaskAction,
     DATE_CONGRATS,
     DATE_GIFT,
+    adjusted_text,
+    assign_reply_text,
     created_kb,
     date_alert_kb,
     format_digest,
@@ -332,6 +335,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
                              "Напиши, что с ним сделать.")
 
     async def process(message: Message, user, text: str):
+        if user.adjusting_task_id and not message.forward_origin:
+            await adjust_assignment(message, user, text)
+            return
         try:
             if origin := message.forward_origin:
                 reply = await agent.handle_forwarded(user, text, forward_sender(origin, message), origin.date)
@@ -342,6 +348,55 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             await message.answer("Что-то пошло не так с моделью, попробуй ещё раз.")
             return
         await send_reply(message, user, reply)
+
+    async def adjust_assignment(message: Message, user, text: str):
+        task_id = user.adjusting_task_id
+        await repo.set_adjusting(user.id, None)
+        before = await repo.get_task(user.id, task_id)
+        if before is None or before.status != TaskStatus.OPEN:
+            await process(message, await repo.get_user(user.id), text)  # поручения уже нет — обычное сообщение
+            return
+        before_title = before.title
+        before_due = format_local(before.due_at, user.timezone) if before.due_at else "без срока"
+        try:
+            reply = await agent.handle_adjustment(user, before, text)
+        except Exception:
+            log.exception("adjustment failed")
+            await message.answer("Не получилось поправить, попробуй ещё раз: нажми «✏️ Скорректировать».")
+            return
+        await send_reply(message, user, reply)
+        after = await repo.get_task(user.id, task_id)
+        after_due = format_local(after.due_at, user.timezone) if after.due_at else "без срока"
+        if after.title == before_title and after_due == before_due:
+            return
+        await repo.set_assign_state(user.id, task_id, "accepted")
+        by = await repo.get_user(after.assigned_by)
+        name = await repo.display_name(by.id, user.id)
+        await message.bot.send_message(by.chat_id, adjusted_text(name, before_title, before_due, after, by.timezone))
+
+    @router.callback_query(AssignAction.filter())
+    async def on_assign_action(cb: CallbackQuery, callback_data: AssignAction):
+        user = await ensure_user(cb)
+        task = await repo.get_task(user.id, callback_data.task_id)
+        if task is None or task.assigned_by is None or task.status != TaskStatus.OPEN:
+            await cb.answer("Этого поручения уже нет")
+            return
+        if callback_data.action == "adjust":
+            await repo.set_adjusting(user.id, task.id)
+            await cb.message.answer("✏️ Напиши, что поправить: например «давай в четверг в 13», «лучше в 14:00» "
+                                    "или «не купить, а заказать».")
+            await cb.answer()
+            return
+        state = "accepted" if callback_data.action == "accept" else "declined"
+        task = await repo.set_assign_state(user.id, task.id, state)
+        by = await repo.get_user(task.assigned_by)
+        name = await repo.display_name(by.id, user.id)
+        await cb.message.bot.send_message(by.chat_id, assign_reply_text(task, name, callback_data.action))
+        if state == "accepted":
+            await cb.message.edit_text(f"{cb.message.html_text}\n\n👍 Принято", reply_markup=created_kb(task))
+        else:
+            await cb.message.edit_text(f"{cb.message.html_text}\n\n✖️ Отклонено", reply_markup=None)
+        await cb.answer()
 
     async def send_reply(message: Message, user, reply):
         await message.answer(html.escape(reply.text))

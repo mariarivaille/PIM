@@ -11,7 +11,7 @@ from pim.agent.prompts import build_system_prompt
 from pim.agent.tools import FORWARD_MARK, TOOLS, ToolContext, memory_view, run_tool, task_view
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
-from pim.core.timeutils import WEEKDAYS_RU, to_local
+from pim.core.timeutils import WEEKDAYS_RU, format_local, to_local
 from pim.learning.timing import TimeProfile, load_profile
 from pim.llm.base import Image, LLMProvider, Message
 from pim.planning.day import DayPlanner, Plan
@@ -105,6 +105,14 @@ class Agent:
         wrapped = f"{header}\n{text[:MAX_FORWARD_CHARS]}"
         async with self._locks[user.id]:
             return await self._handle(user, wrapped, reference_time=sent_at, images=images)
+
+    async def handle_adjustment(self, user: User, task: Task, text: str) -> AgentReply:
+        """После «✏️ Скорректировать»: слова пользователя меняют именно это поручение."""
+        due = format_local(task.due_at, user.timezone) if task.due_at else "без срока"
+        wrapped = (f"[Корректировка поручения: дело task_id={task.id} «{task.title}», сейчас {due}. Измени его через "
+                   f"update_task(task_id={task.id}) так, как просит пользователь; новых дел не создавай]\n{text}")
+        async with self._locks[user.id]:
+            return await self._handle(user, wrapped)
 
     async def _delete_facts(self, user: User, numbers: list[int]) -> AgentReply:
         lines = []

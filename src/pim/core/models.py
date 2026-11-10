@@ -55,6 +55,8 @@ class User(Base):
     last_dates_on: Mapped[str | None] = mapped_column(String(10))
     # Реплики раньше этого момента не попадают в контекст диалога (/reset)
     context_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Поручение, которое пользователь сейчас корректирует (после «✏️ Скорректировать» ждём его следующее сообщение)
+    adjusting_task_id: Mapped[int | None] = mapped_column()
     # Последний выданный номер факта в памяти (у каждого пользователя своя нумерация)
     memory_seq: Mapped[int] = mapped_column(default=0, server_default="0")
     # Бот сам запоминает важное из разговоров (рефлексия); пользователь может выключить
@@ -129,6 +131,8 @@ class Task(Base):
     assigned_by: Mapped[int | None] = mapped_column(BigInteger, index=True)
     assign_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     outcome_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Ответ исполнителя на поручение: pending (ещё не ответил) | accepted | declined
+    assign_state: Mapped[str | None] = mapped_column(String(16))
 
 
 class ItemList(Base):

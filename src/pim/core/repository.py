@@ -414,9 +414,28 @@ class Repository:
     async def create_assigned_task(self, assignee_id: int, assigned_by: int, title: str,
                                    due_at: datetime | None = None, notes: str | None = None) -> Task:
         async with self._sm() as s, s.begin():
-            task = Task(user_id=assignee_id, assigned_by=assigned_by, title=title, due_at=due_at, notes=notes)
+            task = Task(user_id=assignee_id, assigned_by=assigned_by, title=title, due_at=due_at, notes=notes,
+                        assign_state="pending")
             s.add(task)
         return task
+
+    async def set_assign_state(self, user_id: int, task_id: int, state: str) -> Task | None:
+        """Ответ исполнителя на поручение. declined закрывает дело — поручившему сообщают отдельно, не «отменено»."""
+        async with self._sm() as s, s.begin():
+            task = await s.get(Task, task_id)
+            if not task or task.user_id != user_id or task.assigned_by is None:
+                return None
+            task.assign_state = state
+            if state == "declined":
+                task.status = TaskStatus.CANCELLED
+                task.outcome_notified_at = utcnow()
+            return task
+
+    async def set_adjusting(self, user_id: int, task_id: int | None) -> None:
+        async with self._sm() as s, s.begin():
+            user = await s.get(User, user_id)
+            if user:
+                user.adjusting_task_id = task_id
 
     async def pending_assignments(self) -> list[tuple[Task, User, User]]:
         """Поручения, о которых исполнитель ещё не знает: (дело, исполнитель, поручивший)."""

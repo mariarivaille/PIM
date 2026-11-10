@@ -24,6 +24,39 @@ class TaskAction(CallbackData, prefix="t"):
     minutes: int = 0
 
 
+class AssignAction(CallbackData, prefix="a"):
+    action: str  # accept | decline | adjust
+    task_id: int
+
+
+def assignment_kb(task: Task) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Принять", callback_data=AssignAction(action="accept", task_id=task.id))
+    kb.button(text="✖️ Отклонить", callback_data=AssignAction(action="decline", task_id=task.id))
+    kb.button(text="✏️ Скорректировать", callback_data=AssignAction(action="adjust", task_id=task.id))
+    kb.adjust(2, 1)
+    return kb.as_markup()
+
+
+def assign_reply_text(task: Task, assignee_name: str, action: str) -> str:
+    """Что получает поручивший, когда исполнитель ответил кнопкой."""
+    title = html.escape(task.title)
+    if action == "accept":
+        return f"👍 {html.escape(assignee_name)} принимает: «{title}»"
+    return f"✖️ {html.escape(assignee_name)} отклоняет: «{title}»"
+
+
+def adjusted_text(assignee_name: str, before_title: str, before_due: str, task: Task, tz: str) -> str:
+    after_due = format_local(task.due_at, tz) if task.due_at else "без срока"
+    changes = []
+    if task.title != before_title:
+        changes.append(f"было «{html.escape(before_title)}» → стало «{html.escape(task.title)}»")
+    if after_due != before_due:
+        changes.append(f"срок: {before_due} → {after_due}")
+    return (f"✏️ {html.escape(assignee_name)} поправляет поручение «{html.escape(before_title)}»:\n"
+            + "\n".join(changes))
+
+
 class ReviewAction(CallbackData, prefix="r"):
     action: str  # all_tomorrow
 

@@ -191,3 +191,51 @@ async def test_assignment_wording_is_from_assignee_view(repo, user, pair):
     res = await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "позвать меня на кофе"})
     assert "Мария" in res["error"]
     assert "assigned_to" in await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "позвать Марию на кофе"})
+
+
+async def test_accept_decline_assignment(repo, user, pair):
+    maria, andrey = pair
+    ctx = ToolContext(repo, maria)
+    await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "купить хлеб"})
+    await run_tool(ctx, "assign_task", {"person": "Андрей", "title": "помыть машину"})
+    bread, car = await repo.list_open_tasks(andrey.id)
+    assert bread.assign_state == "pending"
+
+    assert await repo.set_assign_state(maria.id, bread.id, "accepted") is None  # чужое поручение не трогаем
+    assert (await repo.set_assign_state(andrey.id, bread.id, "accepted")).assign_state == "accepted"
+    declined = await repo.set_assign_state(andrey.id, car.id, "declined")
+    assert declined.status == TaskStatus.CANCELLED
+    # об отказе поручившему сообщили кнопкой — второго «отменено» от планировщика не будет
+    assert all(t.id != car.id for t, _, _ in await repo.pending_outcomes())
+
+
+async def test_adjustment_changes_the_assigned_task(repo, user, pair):
+    from pim.agent.agent import Agent, History
+    from pim.llm.base import Message, ToolCall
+    from tests.test_agent import ScriptedLLM
+
+    maria, andrey = pair
+    await run_tool(ToolContext(repo, maria), "assign_task",
+                   {"person": "Андрей", "title": "позвать Марию на кофе", "day": "today", "time": "13:00"})
+    [task] = await repo.list_open_tasks(andrey.id)
+    llm = ScriptedLLM([
+        Message("assistant", tool_calls=[ToolCall("c1", "update_task",
+                                                  {"task_id": task.id, "day": "thu", "time": "13:00"})]),
+        Message("assistant", "Перенёс на четверг 13:00."),
+    ])
+    agent = Agent(llm, repo, History(repo, 10))
+    await agent.handle_adjustment(andrey, task, "давай в четверг")
+    assert llm.calls[0][-1].content.startswith(f"[Корректировка поручения: дело task_id={task.id}")
+    after = await repo.get_task(andrey.id, task.id)
+    assert to_local(after.due_at, TZ).weekday() == 3 and to_local(after.due_at, TZ).hour == 13
+
+
+def test_assign_reply_texts():
+    from pim.telegram.keyboards import adjusted_text, assign_reply_text, assignment_kb
+    task = SimpleNamespace(id=5, title="позвать Марию на кофе", due_at=None)
+    assert assign_reply_text(task, "Андрей", "accept") == "👍 Андрей принимает: «позвать Марию на кофе»"
+    assert assign_reply_text(task, "Андрей", "decline").startswith("✖️ Андрей отклоняет")
+    assert [b.text for row in assignment_kb(task).inline_keyboard for b in row] == [
+        "✅ Принять", "✖️ Отклонить", "✏️ Скорректировать"]
+    text = adjusted_text("Андрей", "позвать Марию на кофе", "вт 10.11 13:00", task, TZ)
+    assert "срок: вт 10.11 13:00 → без срока" in text and "было «" not in text

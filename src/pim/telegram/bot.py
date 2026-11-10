@@ -16,8 +16,8 @@ from pim.stt.base import Transcriber
 from pim.telegram.bot_helpers import invite_code
 from pim.telegram.handlers import make_router
 from pim.telegram.keyboards import (
+    assignment_kb,
     assignment_text,
-    created_kb,
     list_additions_text,
     open_list_kb,
     outcome_text,
@@ -79,7 +79,7 @@ class TelegramNotifier:
 
     async def send_assignment(self, assignee: User, task: Task, by_name: str) -> None:
         await self._bot.send_message(assignee.chat_id, assignment_text(task, by_name, assignee.timezone),
-                                     reply_markup=created_kb(task))
+                                     reply_markup=assignment_kb(task))
 
     async def send_outcome(self, by: User, task: Task, assignee_name: str) -> None:
         await self._bot.send_message(by.chat_id, outcome_text(task, assignee_name))
