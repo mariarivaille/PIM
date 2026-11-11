@@ -220,6 +220,15 @@ def _check_rrule(value: str | None) -> str | None:
     return value
 
 
+_NO_DEADLINE = re.compile(r"без (?:срока|времени|даты|напоминани[яй])|когда-нибудь|когда будет время|не напоминай",
+                          re.IGNORECASE)
+
+
+def _no_deadline_wanted(user_text: str) -> bool:
+    """Пользователь прямо попросил дело без срока — тогда время не придумываем."""
+    return bool(_NO_DEADLINE.search(user_text))
+
+
 async def _get(ctx: ToolContext, task_id: int) -> Task:
     if ctx.adjust_task is not None and int(task_id) == ctx.adjust_task.id:
         # корректировка поручения: поручивший правит дело, которое лежит у исполнителя — только это одно
@@ -256,7 +265,20 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
             "рабочее время, покупки и быт — вечер после работы, личное — с учётом распорядка, не ночью) "
             "и вызови create_task ещё раз с time и time_guessed=true"
         )
-    due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
+    no_when = not (due_at or day or time or in_minutes)
+    if no_when and not rrule and not _no_deadline_wanted(ctx.user_text):
+        if not ctx.asked_for_time:
+            # дело без срока никто не напомнит: модель пишет его так, когда пользователь не назвал ни дня, ни времени
+            ctx.asked_for_time = True
+            raise ToolError(
+                "срок не указан, а без срока бот не напомнит. Выбери день и время сам по смыслу дела и памяти "
+                "о пользователе (звонки и организации — рабочее время, покупки и быт — вечер после работы, "
+                "срочное — сегодня, не ночью) и вызови create_task ещё раз с day, time и time_guessed=true"
+            )
+        in_minutes = None
+        due, auto = nearest_reasonable_time(utcnow(), ctx.user.timezone), True
+    else:
+        due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
     event_at = None

@@ -139,9 +139,25 @@ async def test_title_has_no_time_after_create_or_move(repo, user):
     ctx = ToolContext(repo, user)
     res = await run_tool(ctx, "create_task", {"title": "обнять милую в обед", "day": "today", "time": "13:00"})
     assert res["created"]["title"] == "обнять милую"
+    ctx.user_text = "подумать про отпуск в выходные, без срока"
     no_due = await run_tool(ctx, "create_task", {"title": "подумать про отпуск в выходные"})
     assert no_due["created"]["title"] == "подумать про отпуск в выходные"  # без срока время — единственное место
     # перенос дела, в названии которого осталось время, — название чистится
     task = await repo.create_task(user.id, "позвонить маме вечером", due_at=parse_local("2030-01-10T19:00", TZ))
     res = await run_tool(ctx, "update_task", {"task_id": task.id, "time": "10:00"})
     assert res["updated"]["title"] == "позвонить маме"
+
+
+async def test_task_without_any_time_gets_one(repo, user):
+    ctx = ToolContext(repo, user, user_text="купить таблетки от укачивания")
+    res = await run_tool(ctx, "create_task", {"title": "купить таблетки от укачивания"})
+    assert "срок не указан" in res["error"]  # сначала просим модель выбрать время
+    res = await run_tool(ctx, "create_task", {"title": "купить таблетки от укачивания"})
+    assert res["created"]["due"] and res["created"]["time_chosen_by_assistant"]  # упрямится — ставит код
+    assert ctx.touched[0].due_at > utcnow()
+
+
+async def test_explicit_no_deadline_is_respected(repo, user):
+    ctx = ToolContext(repo, user, user_text="запиши когда-нибудь выучить испанский")
+    res = await run_tool(ctx, "create_task", {"title": "выучить испанский"})
+    assert res["created"]["due"] is None
