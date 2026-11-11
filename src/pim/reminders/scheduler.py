@@ -10,7 +10,7 @@ from pim.learning.timing import TimeProfile, load_profile
 from pim.memory.reflection import Reflector
 from pim.reminders.digest import Digest, build_digest, digest_due
 from pim.reminders.dates import UpcomingDate, alerts_for_today, dates_due, occurrence_key, user_upcoming_dates
-from pim.reminders.review import Review, evening_review, review_context, review_due
+from pim.reminders.review import Review, evening_review, review_context, review_due, roll_over
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,10 @@ class ReminderScheduler:
             await self._repo.mark_reminded(task.id, now)
             sent += 1
         return sent
+
+    async def tick_rollover(self) -> int:
+        """Дела, оставшиеся на прошедших днях, — на сегодня (после полуночи и к утренней сводке)."""
+        return len(await roll_over(self._repo, utcnow()))
 
     async def tick_digests(self) -> int:
         now = utcnow()
@@ -180,8 +184,8 @@ class ReminderScheduler:
     async def run_forever(self) -> None:
         log.info("reminder scheduler started, poll every %ss", self._poll)
         while True:
-            for job in (self.tick, self.tick_shared, self.tick_digests, self.tick_dates, self.tick_reviews,
-                        self.tick_reflection):
+            for job in (self.tick_rollover, self.tick, self.tick_shared, self.tick_digests, self.tick_dates,
+                        self.tick_reviews, self.tick_reflection):
                 try:
                     await job()
                 except Exception:

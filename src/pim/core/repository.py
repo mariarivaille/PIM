@@ -682,6 +682,15 @@ class Repository:
                 select(TaskEvent).where(TaskEvent.user_id == user_id, TaskEvent.at >= since).order_by(TaskEvent.at)
             ))
 
+    async def overdue_tasks(self, before: datetime) -> list[tuple[Task, User]]:
+        """Открытые дела всех пользователей со сроком раньше before (для переноса с прошедших дней)."""
+        async with self._sm() as s:
+            res = await s.execute(
+                select(Task, User).join(User, User.id == Task.user_id)
+                .where(Task.status == TaskStatus.OPEN, Task.due_at.is_not(None), Task.due_at < before)
+            )
+            return [(t, u) for t, u in res.all()]
+
     async def due_tasks(self, now: datetime) -> list[tuple[Task, User]]:
         """Открытые задачи, по которым пора напомнить и ещё не напомнили."""
         async with self._sm() as s:

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from pim.core.models import Task, TaskStatus, User
 from pim.core.repository import Repository
-from pim.core.timeutils import format_local, next_occurrence, to_local
+from pim.core.timeutils import format_local, nearest_reasonable_time, next_occurrence, to_local
 from pim.reminders.daily import daily_due
 
 
@@ -93,3 +93,31 @@ def review_context(review: Review, tz: str) -> str | None:
     lines = ["[Вечерний разбор] Не успели — перенёс на завтра:"]
     lines += [f"{i}. {t.title} — {format_local(t.due_at, tz)}" for i, t in enumerate(review.moved, 1)]
     return "\n".join(lines)
+
+
+def today_same_time(task: Task, now: datetime, tz: str) -> datetime:
+    """Дело с прошедшего дня — на сегодня в то же время (повторяющееся — на следующее срабатывание).
+    Если это время сегодня уже прошло — на ближайшее разумное, чтобы не звенеть «задним числом»."""
+    if task.rrule and (nxt := next_occurrence(task.rrule, task.due_at, tz, after=now)):
+        return nxt
+    local_due = to_local(task.due_at, tz)
+    today = to_local(now, tz).date()
+    moved = datetime.combine(today, local_due.time().replace(tzinfo=None), tzinfo=ZoneInfo(tz))
+    moved = moved.astimezone(ZoneInfo("UTC"))
+    return moved if moved > now else nearest_reasonable_time(now, tz)
+
+
+async def roll_over(repo: Repository, now: datetime) -> list[Task]:
+    """Ничего не висит на прошедших днях: открытые дела со вчерашним и более ранним сроком — на сегодня.
+
+    Обычно их уже перенёс вечерний разбор; это страховка — дела позже времени разбора, выключенный разбор,
+    бот, который в 21:00 не работал. Как и разбор, не пишется в task_events.
+    """
+    moved = []
+    for task, user in await repo.overdue_tasks(now):
+        day_start = to_local(now, user.timezone).replace(hour=0, minute=0, second=0, microsecond=0)
+        if task.due_at >= day_start:
+            continue  # сегодняшнее — дело вечернего разбора
+        if updated := await repo.update_task(user.id, task.id, due_at=today_same_time(task, now, user.timezone)):
+            moved.append(updated)
+    return moved

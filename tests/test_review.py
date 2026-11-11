@@ -9,6 +9,7 @@ from pim.reminders.review import (
     postpone_all_to_tomorrow,
     postpone_to_tomorrow,
     review_due,
+    roll_over,
     tomorrow_same_time,
 )
 from pim.reminders.scheduler import ReminderScheduler
@@ -146,3 +147,23 @@ async def test_update_to_other_day_keeps_time(repo, user):
     task = await repo.create_task(user.id, "банк", due_at=parse_local("2030-01-10T16:45", TZ))
     res = await run_tool(ToolContext(repo, user), "update_task", {"task_id": task.id, "day": "fri"})
     assert res["updated"]["due"].endswith("16:45") and "time_chosen_by_assistant" not in res["updated"]
+
+
+async def test_rollover_moves_past_days_to_today(repo, user):
+    morning = parse_local("2026-11-11T09:00", TZ)
+    await repo.create_task(user.id, "вчера вечером", due_at=parse_local("2026-11-10T19:00", TZ))
+    await repo.create_task(user.id, "вчера утром", due_at=parse_local("2026-11-10T08:00", TZ))
+    await repo.create_task(user.id, "сегодня рано", due_at=parse_local("2026-11-11T07:00", TZ))
+    await repo.create_task(user.id, "каждый день", due_at=parse_local("2026-11-09T21:30", TZ), rrule="FREQ=DAILY")
+    other = await repo.get_or_create_user(2, 200, TZ)
+    await repo.create_task(other.id, "чужое позавчера", due_at=parse_local("2026-11-09T12:00", TZ))
+
+    moved = {t.title: to_local(t.due_at, TZ).strftime("%d.%m %H:%M") for t in await roll_over(repo, morning)}
+    assert moved == {
+        "вчера вечером": "11.11 19:00",
+        "вчера утром": "11.11 10:00",  # 08:00 сегодня уже прошло — на ближайшее разумное время
+        "каждый день": "11.11 21:30",
+        "чужое позавчера": "11.11 12:00",
+    }  # «сегодня рано» не трогаем — его разберёт вечер
+    assert await roll_over(repo, morning) == []
+    assert await repo.task_events(user.id, morning - timedelta(days=30)) == []
