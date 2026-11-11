@@ -41,7 +41,7 @@ async def main() -> None:
     dp = make_dispatcher(agent, repo, settings, transcriber)
     dp.startup.register(setup_commands)
     scheduler = ReminderScheduler(
-        repo, TelegramNotifier(bot), settings.reminder_poll_seconds,
+        repo, TelegramNotifier(bot, repo), settings.reminder_poll_seconds,
         reflector=Reflector(llm, repo, settings.max_memories),
         reflection_idle_minutes=settings.reflection_idle_minutes,
     )

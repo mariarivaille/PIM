@@ -8,6 +8,7 @@ from sqlalchemy.orm import aliased
 
 from pim.core.models import (
     ChatMessage,
+    TaskCard,
     DateAlert,
     DayPlan,
     Connection,
@@ -649,6 +650,18 @@ class Repository:
         if task:
             await self.log_event(user_id, TaskEventKind.CANCELLED, utcnow(), task_id=task_id)
         return task
+
+    async def add_task_card(self, task_id: int, chat_id: int, message_id: int) -> None:
+        async with self._sm() as s, s.begin():
+            s.add(TaskCard(task_id=task_id, chat_id=chat_id, message_id=message_id))
+
+    async def pop_task_cards(self, task_id: int) -> list[TaskCard]:
+        """Забирает (и забывает) все сообщения с карточкой дела."""
+        async with self._sm() as s, s.begin():
+            cards = list(await s.scalars(select(TaskCard).where(TaskCard.task_id == task_id)))
+            for c in cards:
+                await s.delete(c)
+            return cards
 
     async def snooze_task(self, user_id: int, task_id: int, until: datetime) -> Task | None:
         task = await self.update_task(user_id, task_id, due_at=until)

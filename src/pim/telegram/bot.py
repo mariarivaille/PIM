@@ -14,6 +14,7 @@ from pim.reminders.dates import UpcomingDate
 from pim.reminders.review import Review
 from pim.stt.base import Transcriber
 from pim.telegram.bot_helpers import invite_code
+from pim.telegram.cards import remember_card, remove_cards
 from pim.telegram.handlers import make_router
 from pim.telegram.keyboards import (
     assignment_kb,
@@ -60,14 +61,19 @@ class AllowlistMiddleware(BaseMiddleware):
 
 
 class TelegramNotifier:
-    def __init__(self, bot: Bot):
+    def __init__(self, bot: Bot, repo: Repository | None = None):
         self._bot = bot
+        self._repo = repo
 
     async def send_reminder(self, user: User, task: Task, usual_snooze: int | None = None) -> None:
-        await self._bot.send_message(
+        if self._repo:  # прошлые карточки этого дела (повторяющееся — вчерашнее напоминание) больше не нужны
+            await remove_cards(self._bot, self._repo, task.id)
+        sent = await self._bot.send_message(
             user.chat_id, "🔔 Напоминаю\n\n" + task_card(task, user.timezone),
             reply_markup=reminder_kb(task, usual_snooze),
         )
+        if self._repo:
+            await remember_card(self._repo, task.id, sent)
 
     async def send_digest(self, user: User, digest: Digest) -> None:
         # есть дела без времени или просроченные — предлагаем разложить их по дню

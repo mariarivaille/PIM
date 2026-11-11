@@ -9,6 +9,7 @@ from aiogram.utils.chat_action import ChatActionSender
 
 from pim.agent.agent import Agent, ForwardedPart
 from pim.agent.tools import with_reply
+from pim.telegram.cards import delete_message, remember_card, remove_cards
 from pim.config import Settings
 from pim.core.models import TaskStatus, utcnow
 from pim.core.repository import Repository
@@ -206,6 +207,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             await cb.answer("Дело не найдено или уже закрыто")
         else:
             await cb.answer("✅ Сделано")
+            await remove_cards(cb.bot, repo, task.id)
         prefix = f"{callback_data.number}. "
         lines = [f"<s>{line}</s> ✅" if line.startswith(prefix) and not line.endswith("✅") else line
                  for line in cb.message.html_text.split("\n")]
@@ -494,9 +496,12 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         for t in reply.touched:
             seen[t.id] = t
         for t in seen.values():
+            # старые карточки этого дела (с прежним временем или уже закрытого) — убираем, актуальная ниже
+            await remove_cards(message.bot, repo, t.id)
             if t.status == "open":
-                await message.answer(task_card(t, user.timezone, auto_time=t.id in reply.auto_time),
-                                     reply_markup=created_kb(t))
+                card = await message.answer(task_card(t, user.timezone, auto_time=t.id in reply.auto_time),
+                                            reply_markup=created_kb(t))
+                await remember_card(repo, t.id, card)
         for list_id in reply.lists_touched:
             await show_list_card(message, user, list_id)
         if reply.plan is not None:
@@ -527,9 +532,12 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             task, note = None, ""
 
         if task is None:
-            await cb.answer("Задача не найдена или уже закрыта", show_alert=False)
+            # кнопка под копией уже закрытого дела — копию убираем
+            await cb.answer("Это дело уже закрыто")
+            await delete_message(cb.bot, cb.message.chat.id, cb.message.message_id)
             return
         await cb.message.edit_text(f"{task_card(task, user.timezone)}\n\n{note}", reply_markup=None)
         await cb.answer()
+        await remove_cards(cb.bot, repo, task.id, keep_message_id=cb.message.message_id)
 
     return router

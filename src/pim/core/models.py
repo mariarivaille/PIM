@@ -138,6 +138,18 @@ class Task(Base):
     assign_round: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
+class TaskCard(Base):
+    """Сообщение в чате с карточкой дела и кнопками: при закрытии/переносе дела лишние копии удаляются."""
+
+    __tablename__ = "task_cards"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    message_id: Mapped[int] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
 class ItemList(Base):
     """Список (покупки, в поездку, фильмы…): пункты без времени и напоминаний.
 

@@ -369,12 +369,14 @@ async def complete_task(ctx: ToolContext, task_id: int) -> dict:
     task = await ctx.repo.complete_task(ctx.user.id, int(task_id), ctx.user.timezone)
     if not task:
         raise ToolError(f"задача {task_id} уже закрыта")
+    ctx.touched.append(task)  # чтобы бот убрал из чата старые карточки этого дела
     return {"completed": task_view(task, ctx.user.timezone)}
 
 
 async def cancel_task(ctx: ToolContext, task_id: int) -> dict:
     await _get(ctx, task_id)
     task = await ctx.repo.cancel_task(ctx.user.id, int(task_id))
+    ctx.touched.append(task)
     return {"cancelled": task_view(task, ctx.user.timezone)}
 
 
