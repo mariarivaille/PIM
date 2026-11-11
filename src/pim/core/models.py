@@ -49,7 +49,7 @@ class User(Base):
     digest_time: Mapped[str | None] = mapped_column(String(5), default="09:00", server_default="09:00")
     # Локальная дата (YYYY-MM-DD) последней отправленной сводки — чтобы не слать дважды
     last_digest_on: Mapped[str | None] = mapped_column(String(10))
-    # Локальное время вечернего разбора «что переносим?» "HH:MM"; None = выключен
+    # Локальное время вечернего разбора (автоперенос несделанного на завтра) "HH:MM"; None = выключен
     review_time: Mapped[str | None] = mapped_column(String(5), default="21:00", server_default="21:00")
     last_review_on: Mapped[str | None] = mapped_column(String(10))
     # Когда последний раз проверяли важные даты (локальная дата) — раз в день

@@ -3,7 +3,9 @@ from datetime import timedelta
 from pim.agent.tools import ToolContext, run_tool
 from pim.core.timeutils import parse_local, to_local
 from pim.reminders.review import (
+    Review,
     build_review,
+    evening_review,
     postpone_all_to_tomorrow,
     postpone_to_tomorrow,
     review_due,
@@ -66,7 +68,7 @@ async def test_review_schedule_once_per_day(repo, user, monkeypatch):
 
     class Notifier:
         async def send_review(self, u, review):
-            sent.append(len(review.pending))
+            sent.append(len(review.moved))
 
     monkeypatch.setattr("pim.reminders.scheduler.utcnow", lambda: EVENING)
     sched = ReminderScheduler(repo, Notifier(), 30)
@@ -85,19 +87,50 @@ async def test_review_day_marked_even_when_silent(repo, user, monkeypatch):
     assert (await repo.get_user(user.id)).last_review_on == "2026-11-10"
 
 
-async def test_review_messages(repo, user):
+async def test_evening_review_moves_overdue_to_tomorrow(repo, user):
+    await repo.create_task(user.id, "просрочено", due_at=parse_local("2026-11-08T10:00", TZ))
+    await repo.create_task(user.id, "сегодня", due_at=parse_local("2026-11-10T15:00", TZ))
+    await repo.create_task(user.id, "позже сегодня", due_at=parse_local("2026-11-10T23:30", TZ))
+    await repo.create_task(user.id, "каждый день", due_at=parse_local("2026-11-10T09:00", TZ), rrule="FREQ=DAILY")
+    await repo.create_task(user.id, "по вторникам", due_at=parse_local("2026-11-10T08:00", TZ),
+                           rrule="FREQ=WEEKLY;BYDAY=TU")
+    review = await evening_review(repo, user, EVENING)
+
+    moved = {t.title: to_local(t.due_at, TZ).strftime("%d.%m %H:%M") for t in review.moved}
+    assert moved == {"просрочено": "11.11 10:00", "сегодня": "11.11 15:00",
+                     "каждый день": "11.11 09:00", "по вторникам": "17.11 08:00"}
+    assert [t.title for t in review.later] == ["позже сегодня"]
+    # перенос — решение бота, а не «отложил» пользователя: умное время им не учится
+    assert await repo.task_events(user.id, EVENING - timedelta(days=30)) == []
+    again = await evening_review(repo, user, EVENING)  # повторный разбор ничего не двигает
+    assert again.moved == [] and [t.title for t in again.later] == ["позже сегодня"]
+
+
+async def test_review_is_one_message(repo, user):
     for i in range(MAX_REVIEW_CARDS + 2):
         await repo.create_task(user.id, f"дело {i}", due_at=parse_local("2026-11-10T10:00", TZ) + timedelta(minutes=i))
-    msgs = review_messages(await build_review(repo, user, EVENING), TZ)
-    header, header_kb = msgs[0]
-    assert "Не закрыто: 12 дел" in header and "первые 10" in header
-    assert header_kb.inline_keyboard[0][0].text == "➡️ Перенести всё на завтра"
-    assert len(msgs) == 1 + MAX_REVIEW_CARDS
-    assert [b.text for b in msgs[1][1].inline_keyboard[0]] == ["✅ Сделано", "➡️ На завтра", "🗑"]
+    await repo.create_task(user.id, "позже", due_at=parse_local("2026-11-10T23:30", TZ))
+    [(text, kb)] = review_messages(await evening_review(repo, user, EVENING), TZ)
+    assert "перенёс на завтра (12 дел)" in text and "1. дело 0 — ср 11.11 10:00" in text
+    assert "…и ещё 2" in text and "• позже — 23:30" in text
+    buttons = [b.text for row in kb.inline_keyboard for b in row]
+    assert buttons == [f"✅ {i}" for i in range(1, MAX_REVIEW_CARDS + 1)]
+
+
+async def test_scheduler_review_goes_to_history(repo, user, monkeypatch):
+    monkeypatch.setattr("pim.reminders.scheduler.utcnow", lambda: EVENING)
+    await repo.create_task(user.id, "банк", due_at=parse_local("2026-11-10T15:00", TZ))
+
+    class Notifier:
+        async def send_review(self, u, review):
+            pass
+
+    assert await ReminderScheduler(repo, Notifier(), 30).tick_reviews() == 1
+    [msg] = await repo.recent_messages(user.id, 10)
+    assert msg.role == "assistant" and "1. банк — ср 11.11 15:00" in msg.content
 
 
 def test_all_done_message():
-    from pim.reminders.review import Review
     [(text, kb)] = review_messages(Review(pending=[], done_today=3), TZ)
     assert "закрыты" in text and "3 дела" in text and kb is None
 

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from pim.agent.agent import Agent, ForwardedPart
@@ -18,7 +18,7 @@ from pim.reminders.digest import build_digest
 from pim.planning.day import apply_plan
 from pim.sharing import negotiation
 from pim.reminders.dates import CONGRATS_OFFSET, GIFT_OFFSET, UpcomingDate, reminder_at
-from pim.reminders.review import build_review, postpone_all_to_tomorrow, postpone_to_tomorrow
+from pim.reminders.review import evening_review, postpone_all_to_tomorrow, postpone_to_tomorrow, review_context
 from pim.stt.base import Transcriber
 from pim.telegram.bot_helpers import INVITE_PREFIX, invite_code
 from pim.telegram.burst import Burster, Incoming
@@ -98,7 +98,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             "Запоминаю важное о тебе: сам из разговоров или по просьбе — «запомни, что мама — Ольга, ДР 12 марта». "
             "Посмотреть — /memory, удалить — «удали факт 3».\n\n"
             "/tasks — список дел\n/lists — списки (покупки, в поездку…)\n"
-            "/digest — сводка на сегодня\n/plan — спланировать день\n/review — что переносим?\n"
+            "/digest — сводка на сегодня\n/plan — спланировать день\n/review — разбор дня: несделанное на завтра\n"
             "/memory — что я о тебе знаю\n/habits — твои привычки по времени\n"
             "/people — близкие: поручения и общие списки\n/invite — пригласить близкого\n"
             "/reset — забыть контекст диалога\n\n"
@@ -159,12 +159,32 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     @router.message(Command("review"))
     async def review(message: Message):
         user = await ensure_user(message)
-        r = await build_review(repo, user, utcnow())
+        now = utcnow()
+        r = await evening_review(repo, user, now)
         if not r.should_send:
             await message.answer("На сегодня дел со сроком не было — разбирать нечего.")
             return
         for text, kb in review_messages(r, user.timezone):
             await message.answer(text, reply_markup=kb)
+        if context := review_context(r, user.timezone):
+            await repo.add_messages(user.id, ("assistant", context), at=now)
+
+    @router.callback_query(ReviewAction.filter(F.action == "done"))
+    async def on_review_done(cb: CallbackQuery, callback_data: ReviewAction):
+        """✅ N в разборе: закрыть дело, зачеркнуть его строку и убрать кнопку — сообщение остаётся одно."""
+        user = await ensure_user(cb)
+        task = await repo.complete_task(user.id, callback_data.task_id, user.timezone)
+        if task is None:
+            await cb.answer("Дело не найдено или уже закрыто")
+        else:
+            await cb.answer("✅ Сделано")
+        prefix = f"{callback_data.number}. "
+        lines = [f"<s>{line}</s> ✅" if line.startswith(prefix) and not line.endswith("✅") else line
+                 for line in cb.message.html_text.split("\n")]
+        rows = [[b for b in row if b.callback_data != cb.data] for row in cb.message.reply_markup.inline_keyboard]
+        rows = [row for row in rows if row]
+        kb = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+        await cb.message.edit_text("\n".join(lines), reply_markup=kb)
 
     @router.callback_query(ReviewAction.filter(F.action == "all_tomorrow"))
     async def on_review_all(cb: CallbackQuery):

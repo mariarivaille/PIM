@@ -94,13 +94,14 @@ class TelegramNotifier:
             await self._bot.send_message(user.chat_id, text, reply_markup=kb)
 
 
+
 COMMANDS = [
     BotCommand(command="start", description="Начать и посмотреть настройки"),
     BotCommand(command="tasks", description="Список дел"),
     BotCommand(command="lists", description="Списки: покупки, в поездку…"),
     BotCommand(command="digest", description="План на сегодня"),
     BotCommand(command="plan", description="Спланировать день"),
-    BotCommand(command="review", description="Разбор: что переносим?"),
+    BotCommand(command="review", description="Разбор дня: несделанное — на завтра"),
     BotCommand(command="memory", description="Что я о тебе знаю"),
     BotCommand(command="habits", description="Твои привычки по времени"),
     BotCommand(command="people", description="Близкие: поручения и общие списки"),

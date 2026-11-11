@@ -10,7 +10,7 @@ from pim.learning.timing import TimeProfile, load_profile
 from pim.memory.reflection import Reflector
 from pim.reminders.digest import Digest, build_digest, digest_due
 from pim.reminders.dates import UpcomingDate, alerts_for_today, dates_due, occurrence_key, user_upcoming_dates
-from pim.reminders.review import Review, build_review, review_due
+from pim.reminders.review import Review, evening_review, review_context, review_due
 
 log = logging.getLogger(__name__)
 
@@ -83,13 +83,13 @@ class ReminderScheduler:
         return sent
 
     async def tick_reviews(self) -> int:
-        """Вечерний разбор: несделанное за сегодня — с кнопками «сделано / на завтра / удалить»."""
+        """Вечерний разбор: несделанное за сегодня переносится на завтра, итог — одним сообщением."""
         now = utcnow()
         sent = 0
         for user in await self._repo.users_with_review():
             if not review_due(user, now):
                 continue
-            review = await build_review(self._repo, user, now)
+            review = await evening_review(self._repo, user, now)
             if review.should_send:
                 try:
                     await self._notifier.send_review(user, review)
@@ -97,6 +97,8 @@ class ReminderScheduler:
                     log.exception("failed to send review to user %s", user.id)
                     continue
                 sent += 1
+                if context := review_context(review, user.timezone):
+                    await self._repo.add_messages(user.id, ("assistant", context), at=now)
             # и когда разбирать нечего — помечаем день, чтобы не проверять каждые 30 секунд
             await self._repo.mark_review_sent(user.id, to_local(now, user.timezone).date().isoformat())
         return sent

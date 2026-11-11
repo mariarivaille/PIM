@@ -1,4 +1,8 @@
-"""Вечерний разбор «что переносим?»: несделанное за сегодня и просроченное — с кнопками. Без LLM."""
+"""Вечерний разбор: несделанное за сегодня и просроченное само переезжает на завтра, итог — одним сообщением.
+
+Без LLM. Перенос не пишется в task_events как «отложил»: это решение бота, а не пользователя,
+и оно не должно учить умное время.
+"""
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -6,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from pim.core.models import Task, TaskStatus, User
 from pim.core.repository import Repository
-from pim.core.timeutils import to_local
+from pim.core.timeutils import format_local, next_occurrence, to_local
 from pim.reminders.daily import daily_due
 
 
@@ -14,11 +18,13 @@ from pim.reminders.daily import daily_due
 class Review:
     pending: list[Task] = field(default_factory=list)  # открытые дела со сроком до конца сегодня
     done_today: int = 0
+    moved: list[Task] = field(default_factory=list)  # перенесены на завтра (уже с новым сроком)
+    later: list[Task] = field(default_factory=list)  # срок ещё сегодня, но позже — не трогаем
 
     @property
     def should_send(self) -> bool:
         """Есть что разбирать — или всё закрыто и можно порадоваться. Если дел не было вовсе — молчим."""
-        return bool(self.pending or self.done_today)
+        return bool(self.pending or self.moved or self.later or self.done_today)
 
 
 def _day_bounds(now: datetime, tz: str) -> tuple[datetime, datetime]:
@@ -52,6 +58,25 @@ async def postpone_to_tomorrow(repo: Repository, user: User, task_id: int, now: 
     return await repo.snooze_task(user.id, task_id, tomorrow_same_time(task.due_at, now, user.timezone))
 
 
+def next_day_due(task: Task, now: datetime, tz: str) -> datetime:
+    """Куда переезжает несделанное: повторяющееся — на следующее срабатывание, остальное — на завтра в то же время."""
+    if task.rrule and (nxt := next_occurrence(task.rrule, task.due_at, tz, after=now)):
+        return nxt
+    return tomorrow_same_time(task.due_at, now, tz)
+
+
+async def evening_review(repo: Repository, user: User, now: datetime) -> Review:
+    """Разбор с автопереносом: всё, чей срок уже прошёл, — на завтра; что ещё впереди сегодня — остаётся."""
+    review = await build_review(repo, user, now)
+    for task in review.pending:
+        if task.due_at > now:
+            review.later.append(task)
+        elif moved := await repo.update_task(user.id, task.id, due_at=next_day_due(task, now, user.timezone)):
+            review.moved.append(moved)
+    review.pending = []
+    return review
+
+
 async def postpone_all_to_tomorrow(repo: Repository, user: User, now: datetime) -> list[Task]:
     """Переносит на завтра всё, что сейчас висит в разборе (список берётся заново на момент нажатия)."""
     moved = []
@@ -59,3 +84,12 @@ async def postpone_all_to_tomorrow(repo: Repository, user: User, now: datetime) 
         if updated := await postpone_to_tomorrow(repo, user, task.id, now):
             moved.append(updated)
     return moved
+
+
+def review_context(review: Review, tz: str) -> str | None:
+    """Разбор простым текстом — в историю диалога, чтобы агент понял ответ на него («второе удали»)."""
+    if not review.moved:
+        return None
+    lines = ["[Вечерний разбор] Не успели — перенёс на завтра:"]
+    lines += [f"{i}. {t.title} — {format_local(t.due_at, tz)}" for i, t in enumerate(review.moved, 1)]
+    return "\n".join(lines)

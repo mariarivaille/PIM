@@ -64,7 +64,9 @@ def counter_text(name: str, before_title: str, before_due: str, task: Task, tz: 
 
 
 class ReviewAction(CallbackData, prefix="r"):
-    action: str  # all_tomorrow
+    action: str  # all_tomorrow (старые сообщения) | done
+    task_id: int = 0
+    number: int = 0  # номер строки в сообщении разбора
 
 
 class DateAction(CallbackData, prefix="d"):
@@ -374,35 +376,38 @@ def created_kb(task: Task) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def review_kb(task: Task) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Сделано", callback_data=TaskAction(action="done", task_id=task.id))
-    kb.button(text="➡️ На завтра", callback_data=TaskAction(action="tomorrow", task_id=task.id))
-    kb.button(text="🗑", callback_data=TaskAction(action="cancel", task_id=task.id))
-    kb.adjust(3)
-    return kb.as_markup()
-
-
 def _tasks_word(n: int) -> str:
     return f"{n} {plural_ru(n, 'дело', 'дела', 'дел')}"
 
 
+def review_line(number: int, task: Task, tz: str) -> str:
+    return f"{number}. {html.escape(task.title)} — {format_local(task.due_at, tz)}"
+
+
 def review_messages(review: Review, tz: str) -> list[tuple[str, InlineKeyboardMarkup | None]]:
-    """Вечерний разбор: заголовок (с «перенести всё», если дел несколько) и карточка на каждое дело."""
-    done = f" Сделано за день: {_tasks_word(review.done_today)} 💪" if review.done_today else ""
-    if not review.pending:
-        return [(f"🌙 Все дела на сегодня закрыты 🎉{done}", None)]
-    header = [f"🌙 <b>Вечерний разбор</b>\nНе закрыто: {_tasks_word(len(review.pending))}.{done}\nЧто с ними?"]
-    if len(review.pending) > MAX_REVIEW_CARDS:
-        header.append(f"Показываю первые {MAX_REVIEW_CARDS}, остальные — в /tasks.")
+    """Вечерний разбор одним сообщением: что перенесено на завтра (с кнопками «✅ N»), что ещё впереди сегодня."""
+    done = f"Сделано за день: {_tasks_word(review.done_today)} 💪" if review.done_today else ""
+    if not (review.moved or review.later):
+        return [(f"🌙 Все дела на сегодня закрыты 🎉 {done}".rstrip(), None)]
+    lines = ["🌙 <b>Вечерний разбор</b>"] + ([done] if done else [])
     kb = None
-    if len(review.pending) > 1:
+    if review.moved:
+        shown = review.moved[:MAX_REVIEW_CARDS]
+        lines += ["", f"Не успели — перенёс на завтра ({_tasks_word(len(review.moved))}):"]
+        lines += [review_line(i, t, tz) for i, t in enumerate(shown, 1)]
+        if len(review.moved) > len(shown):
+            lines.append(f"…и ещё {len(review.moved) - len(shown)} — в /tasks")
         builder = InlineKeyboardBuilder()
-        builder.button(text="➡️ Перенести всё на завтра", callback_data=ReviewAction(action="all_tomorrow"))
+        for i, t in enumerate(shown, 1):
+            builder.button(text=f"✅ {i}", callback_data=ReviewAction(action="done", task_id=t.id, number=i))
+        builder.adjust(5)
         kb = builder.as_markup()
-    messages = [("\n".join(header), kb)]
-    messages += [(task_card(t, tz), review_kb(t)) for t in review.pending[:MAX_REVIEW_CARDS]]
-    return messages
+    if review.later:
+        lines += ["", "Ещё сегодня:"]
+        lines += [f"• {html.escape(t.title)} — {to_local(t.due_at, tz):%H:%M}" for t in review.later]
+    if review.moved:
+        lines += ["", "Если что-то уже сделано — нажми ✅ с его номером, другое время или удалить — просто напиши."]
+    return [("\n".join(lines), kb)]
 
 
 def _need_more(have: int, need: int) -> str:
