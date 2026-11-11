@@ -87,6 +87,21 @@ AFFIRMATIVE = re.compile(r"^\s*(да|ага|угу|давай|конечно|о�
 FORWARD_MARK = "[Пересланное сообщение"
 # Подпись пользователя к пересланному — его собственные слова
 COMMENT_MARK = "[Комментарий пользователя к пересланному]"
+# Ответ (reply) на сообщение в чате: процитированное идёт модели, но словами пользователя не считается
+REPLY_MARK = "[В ответ на "
+_REPLY_END = "»]\n"
+
+
+def with_reply(text: str, author: str, quoted: str) -> str:
+    """«.» в ответ на сообщение бота — модели нужно видеть, на что отвечают."""
+    return f"{REPLY_MARK}{author}: «{quoted}»]\n{text}"
+
+
+def own_words(text: str) -> str:
+    """Текст пользователя без процитированного сообщения, на которое он ответил."""
+    if text.startswith(REPLY_MARK) and _REPLY_END in text:
+        return text.split(_REPLY_END, 1)[1]
+    return text
 
 
 def memory_requested(ctx: "ToolContext") -> bool:

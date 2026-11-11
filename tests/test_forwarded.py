@@ -107,3 +107,33 @@ async def test_deadline_2359_is_not_a_night_reminder(repo, user):
     ctx = ToolContext(repo, user, asked_for_time=True)
     await run_tool(ctx, "create_task", {"title": "подать заявку", "due_at": "2030-11-22T23:59"})
     assert to_local(ctx.touched[0].due_at, TZ).hour == 10
+
+
+async def test_reply_quote_goes_to_model_but_not_to_user_words(repo, user):
+    from pim.agent.tools import own_words, with_reply
+    text = with_reply(".", "твоё сообщение", "Запомни: позвонить маме в пятницу")
+    assert own_words(text) == "."
+    user.auto_memory = False
+    ctx = ToolContext(repo, user, user_text=own_words(text))
+    assert "error" in await run_tool(ctx, "remember", {"content": "позвонить маме"})  # «запомни» — не его слова
+    user.auto_memory = True
+
+    llm = ScriptedLLM([Message("assistant", "Что с этим сделать?")])
+    agent = Agent(llm, repo, History(repo, 10))
+    await agent.handle(user, text)
+    assert "позвонить маме в пятницу" in llm.calls[0][-1].content
+
+
+def test_replied_text():
+    from pim.telegram.handlers import replied_text
+    me = TgUser(id=1, is_bot=False, first_name="Мария")
+    bot = SimpleNamespace(id=99)
+    bot_msg = SimpleNamespace(from_user=TgUser(id=99, is_bot=True, first_name="Pim"), text="Купить хлеб", caption=None)
+    msg = SimpleNamespace(text=".", caption=None, reply_to_message=bot_msg, quote=None, forward_origin=None,
+                          bot=bot, from_user=me)
+    assert replied_text(msg) == "[В ответ на твоё сообщение: «Купить хлеб»]\n."
+    msg.quote = SimpleNamespace(text="хлеб")
+    assert "«хлеб»" in replied_text(msg)
+    plain = SimpleNamespace(text="привет", caption=None, reply_to_message=None, quote=None, forward_origin=None,
+                            bot=bot, from_user=me)
+    assert replied_text(plain) == "привет"

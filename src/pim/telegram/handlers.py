@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from pim.agent.agent import Agent, ForwardedPart
+from pim.agent.tools import with_reply
 from pim.config import Settings
 from pim.core.models import TaskStatus, utcnow
 from pim.core.repository import Repository
@@ -53,6 +54,33 @@ log = logging.getLogger(__name__)
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 # С этого часа /plan планирует уже завтрашний день
 PLAN_TOMORROW_FROM = 20
+
+
+MAX_QUOTE_CHARS = 1500
+
+
+def replied_text(message: Message, text: str | None = None) -> str:
+    """Свайп «Ответить» на сообщение: добавляем к тексту то, на что ответили (или выделенную цитату)."""
+    if text is None:
+        text = message.text or message.caption or ""
+    replied = message.reply_to_message
+    quoted = message.quote.text if message.quote else ""
+    if not quoted and replied:
+        quoted = replied.text or replied.caption or ""
+    if message.forward_origin or not quoted:
+        return text
+    author = replied.from_user if replied else None
+    if author is None:
+        who = "сообщение"
+    elif author.id == message.bot.id:
+        who = "твоё сообщение"
+    elif message.from_user and author.id == message.from_user.id:
+        who = "своё сообщение"
+    else:
+        who = f"сообщение от {author.full_name}"
+    if len(quoted) > MAX_QUOTE_CHARS:
+        quoted = quoted[:MAX_QUOTE_CHARS] + "…"
+    return with_reply(text, who, quoted)
 
 
 def forward_sender(origin, message: Message) -> str:
@@ -352,7 +380,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     @router.message(F.text | F.caption)
     async def on_text(message: Message):
         user = await ensure_user(message)
-        burster.add(user.id, Incoming(message, message.text or message.caption,
+        burster.add(user.id, Incoming(message, replied_text(message),
                                       forwarded=message.forward_origin is not None))
 
     @router.message(F.voice | F.audio | F.video_note)
@@ -377,7 +405,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             await message.answer("Не расслышал, повтори, пожалуйста.")
             return
         await message.answer(f"🎙 <i>{html.escape(text)}</i>")
-        burster.add(user.id, Incoming(message, text, forwarded=message.forward_origin is not None))
+        burster.add(user.id, Incoming(message, replied_text(message, text),
+                                      forwarded=message.forward_origin is not None))
 
     @router.message(F.forward_origin)
     async def on_forwarded_without_text(message: Message):

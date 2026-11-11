@@ -9,7 +9,7 @@ from typing import Callable
 
 from pim.agent.commands import parse_delete_facts
 from pim.agent.prompts import build_system_prompt
-from pim.agent.tools import COMMENT_MARK, FORWARD_MARK, TOOLS, ToolContext, memory_view, run_tool, task_view
+from pim.agent.tools import COMMENT_MARK, FORWARD_MARK, TOOLS, own_words, ToolContext, memory_view, run_tool, task_view
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import WEEKDAYS_RU, format_local, to_local
@@ -104,7 +104,7 @@ class Agent:
 
     async def handle(self, user: User, text: str) -> AgentReply:
         async with self._locks[user.id]:
-            if (numbers := parse_delete_facts(text)) is not None:
+            if (numbers := parse_delete_facts(own_words(text))) is not None:
                 reply = await self._delete_facts(user, numbers)
                 await self.history.add(user.id, Message("user", text), Message("assistant", reply.text))
                 return reply
@@ -188,7 +188,7 @@ class Agent:
         history = await self.history.get(user.id)
         prev_assistant = next((m.content for m in reversed(history) if m.role == "assistant"), "")
         profile = await load_profile(self._repo, user)
-        ctx = ToolContext(repo=self._repo, user=user, user_text=text, prev_assistant=prev_assistant,
+        ctx = ToolContext(repo=self._repo, user=user, user_text=own_words(text), prev_assistant=prev_assistant,
                           max_memories=self._max_memories, reference_time=reference_time, profile=profile,
                           planner=self._planner, adjust_task=adjust_task)
         # в историю уходит только текст (с пометкой «[Фото…]»), сама картинка — только в этот ход

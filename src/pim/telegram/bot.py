@@ -122,9 +122,9 @@ def _log_incoming(event: TelegramObject, user) -> None:
     """Что пришло от Telegram — без текста сообщения, только тип: для разбора «бот не реагирует»."""
     if isinstance(event, Message):
         origin = event.forward_origin
-        log.info("incoming message from %s: type=%s forwarded=%s has_text=%s",
+        log.info("incoming message from %s: type=%s forwarded=%s has_text=%s reply=%s quote=%s",
                  user.id if user else None, event.content_type, origin.type if origin else None,
-                 bool(event.text or event.caption))
+                 bool(event.text or event.caption), event.reply_to_message is not None, event.quote is not None)
 
 
 def make_bot(settings: Settings) -> Bot:
