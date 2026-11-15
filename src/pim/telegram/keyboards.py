@@ -447,7 +447,8 @@ def event_card(event: Event, tz: str) -> str:
         last = to_local(event.ends_at, tz) - timedelta(days=1)
         span = f"{WEEKDAYS_RU[start.weekday()]} {start:%d.%m}" + (f" – {WEEKDAYS_RU[last.weekday()]} {last:%d.%m}"
                                                                      if last.date() > start.date() else "")
-        lines.append(f"🗓 {span}, весь день")
+        n = _all_day_count(event, tz)
+        lines.append(f"🗓 {span}" + (f" · {n} {plural_ru(n, 'день', 'дня', 'дней')}" if n > 1 else ", весь день"))
     else:
         lines.append(f"🗓 {WEEKDAYS_RU[start.weekday()]} {start:%d.%m}, {_event_time(occ, tz)}")
     if event.rrule:
@@ -518,18 +519,36 @@ def calendar_text(events: list[Event], tz: str, now) -> str:
     day = None
     for e in single:
         start = to_local(e.starts_at, tz)
+        place = f" · 📍 {html.escape(e.location)}" if e.location else ""
+        if (n := _all_day_count(e, tz)) > 1:
+            # отпуск, командировка — отдельным периодом, а не «весь день до …» внутри первого дня
+            last = start.date() + timedelta(days=n - 1)
+            now_mark = " · Сейчас" if start.date() <= today else ""
+            lines.append(f"\n<b>{_day(start.date())} – {_day(last)}</b> · {n} {plural_ru(n, 'день', 'дня', 'дней')}"
+                         f"{now_mark}")
+            lines.append(f"🌴 {html.escape(e.title)}{place}")
+            day = None  # следующее событие того же дня — снова под заголовком дня
+            continue
         if start.date() != day:
             day = start.date()
             label = " · Сегодня" if day == today else " · Завтра" if day == today + timedelta(days=1) else ""
-            lines.append(f"\n<b>{WEEKDAYS_RU[day.weekday()]} {day:%d.%m}</b>{label}")
-        occ = Occurrence(e, e.starts_at, e.ends_at)
+            lines.append(f"\n<b>{_day(day)}</b>{label}")
         if e.all_day:
-            last = to_local(e.ends_at, tz) - timedelta(days=1)
-            span = "весь день" + (f" до {WEEKDAYS_RU[last.weekday()]} {last:%d.%m}" if last.date() > start.date() else "")
+            lines.append(f"📅 Весь день — {html.escape(e.title)}{place}")
         else:
-            span = _event_time(occ, tz)
-        lines.append(f"📅 {span} {html.escape(e.title)}" + (f" · 📍 {html.escape(e.location)}" if e.location else ""))
+            lines.append(f"📅 {_event_time(Occurrence(e, e.starts_at, e.ends_at), tz)} {html.escape(e.title)}{place}")
     return _fit(lines)
+
+
+def _day(d) -> str:
+    return f"{WEEKDAYS_RU[d.weekday()]} {d:%d.%m}"
+
+
+def _all_day_count(e: Event, tz: str) -> int:
+    """Сколько дней занимает событие «на весь день» (0 — у события есть время)."""
+    if not e.all_day:
+        return 0
+    return max(1, (to_local(e.ends_at, tz).date() - to_local(e.starts_at, tz).date()).days)
 
 
 def tasks_text(tasks: list[Task], tz: str, events: list[Occurrence] | None = None) -> str:

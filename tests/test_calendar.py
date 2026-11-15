@@ -128,7 +128,7 @@ async def test_calendar_text(repo, user):
     text = calendar_text([event, trip, nails, past], TZ, MON)
     assert "🔁 по пн, 19:00–21:00 Спортзал" in text.replace("спортзал", "Спортзал")
     assert text.index("вт 26.11") < text.index("ср 01.01")  # все будущие, по порядку — даже через полтора месяца
-    assert "весь день до пт 10.01 Отпуск" in text and "Было" not in text
+    assert "ср 01.01 – пт 10.01</b> · 10 дней" in text and "🌴 Отпуск" in text and "Было" not in text
     assert "🔔 напомню" not in event_card(event, TZ)  # next_reminder ещё не посчитан
 
 
