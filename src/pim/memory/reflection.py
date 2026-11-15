@@ -85,6 +85,11 @@ def parse_reflection(raw: str) -> dict:
     return extract_json(raw)
 
 
+def _is_fact(content: str) -> bool:
+    """«Мама», «Оля» — не факт, а упоминание: в одном слове нечего помнить (Gemini такие выдаёт)."""
+    return len(re.findall(r"\w+", content)) >= 2
+
+
 class Reflector:
     def __init__(self, llm: LLMProvider, repo: Repository, max_memories: int):
         self._llm = llm
@@ -141,7 +146,7 @@ class Reflector:
             if not isinstance(item, dict):
                 continue
             content = str(item.get("content") or "").strip()[:MAX_CONTENT_CHARS]
-            if not content or _norm(content) in known:
+            if not content or _norm(content) in known or not _is_fact(content):
                 continue
             try:
                 kind = MemoryKind(item.get("kind"))

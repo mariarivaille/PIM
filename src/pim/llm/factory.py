@@ -10,6 +10,7 @@ def make_provider(settings: Settings) -> LLMProvider:
             api_key=settings.openrouter_api_key,
             model=settings.openrouter_model,
             base_url=settings.openrouter_base_url,
+            max_tokens=settings.openrouter_max_tokens,
         )
     if settings.llm_provider == "gigachat":
         from pim.llm.gigachat import GigaChatProvider

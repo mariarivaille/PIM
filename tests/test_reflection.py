@@ -49,9 +49,9 @@ async def test_reflection_adds_updates_and_dedupes(repo, user):
 async def test_reflection_respects_memory_limit(repo, user):
     await repo.add_memory(user.id, "a")
     await chat(repo, user, "много фактов")
-    llm = ScriptedLLM([answer(add=[{"kind": "fact", "content": c} for c in ("b", "c", "d")])])
+    llm = ScriptedLLM([answer(add=[{"kind": "fact", "content": f"факт {c}"} for c in ("b", "c", "d")])])
     result = await Reflector(llm, repo, max_memories=2).reflect(user)
-    assert [m.content for m in result.added] == ["b"]
+    assert [m.content for m in result.added] == ["факт b"]
 
 
 async def test_unparsable_answer_is_marked_processed(repo, user):
@@ -105,3 +105,9 @@ async def test_scheduler_reflection_is_silent_and_backs_off(repo, user):
     await sched.tick_reflection()
     await sched.tick_reflection()
     assert Broken.calls == 1
+
+
+def test_one_word_is_not_a_fact():
+    from pim.memory.reflection import _is_fact
+    assert not _is_fact("Мама") and not _is_fact("Оля.")
+    assert _is_fact("Кот - Барсик") and _is_fact("Встаёт в 7:30")

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "qwen/qwen3-235b-a22b-2507"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Предел длины ответа: без него OpenRouter резервирует максимум модели (65k) и отказывает при малом балансе
+    openrouter_max_tokens: int = 2048
 
     gigachat_credentials: str = ""
     # Готовый access-токен вместо ключа авторизации (живёт ограниченное время, бот его не обновляет)

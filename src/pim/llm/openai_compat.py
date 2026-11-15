@@ -12,10 +12,11 @@ log = logging.getLogger(__name__)
 class OpenAICompatProvider:
     """Любой OpenAI-совместимый API: OpenRouter (qwen, gemini, ...), vLLM, локальные сервера."""
 
-    def __init__(self, api_key: str, model: str, base_url: str, temperature: float = 0.2):
+    def __init__(self, api_key: str, model: str, base_url: str, temperature: float = 0.2, max_tokens: int = 2048):
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = model
         self._temperature = temperature
+        self._max_tokens = max_tokens
 
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> Message:
         resp = await self._client.chat.completions.create(
@@ -27,6 +28,7 @@ class OpenAICompatProvider:
             ]
             or None,
             temperature=self._temperature,
+            max_tokens=self._max_tokens,
         )
         msg = resp.choices[0].message
         calls = []
