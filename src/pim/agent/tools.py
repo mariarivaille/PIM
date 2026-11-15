@@ -50,8 +50,6 @@ class ToolContext:
     auto_time: set[int] = field(default_factory=set)
     # уже просили модель выбрать время за этот ход — второй раз не просим, ставим запасное
     asked_for_time: bool = False
-    asked_for_notes: bool = False
-    require_notes: bool = False  # включает агент; в тестах инструментов по умолчанию выключено
     # уже переспросили модель «чьё это дело», когда в сообщении упомянут близкий
     asked_whose_task: bool = False
     # уже просили переписать поручение от лица исполнителя (без «меня»)
@@ -315,14 +313,6 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         due, auto = nearest_reasonable_time(utcnow(), ctx.user.timezone), True
     else:
         due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
-    if ctx.require_notes and not (notes or "").strip() and not ctx.asked_for_notes:
-        # у каждого дела комментарий: контекст и временные ограничения — модель часто его пропускает
-        ctx.asked_for_notes = True
-        raise ToolError(
-            "notes пустые. Добавь короткий комментарий (1–2 фразы): контекст и временные ограничения дела — срок, "
-            "часы работы, «только после работы», «до отъезда». Проверь, что выбранное время в них укладывается, "
-            "и вызови create_task ещё раз с теми же аргументами и notes"
-        )
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
     event_at = None
@@ -834,8 +824,8 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "in_minutes": _IN_MINUTES,
                     "due_at": _DUE,
                     "rrule": _RRULE,
-                    "notes": {"type": "string", "description": "Комментарий: контекст и временные ограничения "
-                              "(срок, часы работы, «после работы»). Обязателен"},
+                    "notes": {"type": "string", "description": "Комментарий, если есть что сказать: контекст и "
+                              "временные ограничения (срок, часы работы, «после работы»)"},
                     "date_from_forwarded": _FROM_FORWARDED,
                     "remind_before_minutes": {
                         "type": "integer",

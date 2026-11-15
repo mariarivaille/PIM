@@ -122,7 +122,6 @@ class Agent:
         self._max_memories = max_memories
         self._repo = repo
         self.history = history
-        self.require_notes = True  # у каждого дела комментарий (см. create_task)
         self._specs = [spec for spec, _ in TOOLS.values()]
         # Сообщения одного пользователя обрабатываются строго по очереди, разные пользователи — параллельно
         self._locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -222,7 +221,7 @@ class Agent:
         profile = await load_profile(self._repo, user)
         ctx = ToolContext(repo=self._repo, user=user, user_text=own_words(text), prev_assistant=prev_assistant,
                           max_memories=self._max_memories, reference_time=reference_time, profile=profile,
-                          planner=self._planner, adjust_task=adjust_task, require_notes=self.require_notes,
+                          planner=self._planner, adjust_task=adjust_task,
                           searcher=self._searcher, searches_left=self._searches_per_turn)
         # в историю уходит только текст (с пометкой «[Фото…]»), сама картинка — только в этот ход
         user_msg = Message("user", text, images=images)
