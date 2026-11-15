@@ -64,9 +64,6 @@ class ToolContext:
     lists_touched: list[int] = field(default_factory=list)
     # привычки по времени (learning/timing.py) — для времени по умолчанию
     profile: TimeProfile | None = None
-    # «спланируй мой день»: планировщик и составленный за ход план (телеграм-слой покажет его с кнопками)
-    planner: Any = None
-    plan: Any = None
     # поиск в интернете (search/web.py); None — выключен. searches_left — сколько поисков ещё можно за ход
     searcher: Any = None
     searches_left: int = 0
@@ -521,28 +518,6 @@ async def update_memory(ctx: ToolContext, number: int, content: str | None = Non
     return {"updated": memory_view(memory, ctx.user.timezone)}
 
 
-async def plan_day(ctx: ToolContext, day: str = "today") -> dict:
-    if ctx.planner is None:
-        raise ToolError("планирование недоступно")
-    if day not in DAY_KEYWORDS:
-        raise ToolError(f"day должен быть одним из {DAY_KEYWORDS}, получено {day!r}")
-    target = to_local(resolve_day_time(utcnow(), ctx.user.timezone, day, dt_time(12, 0)), ctx.user.timezone).date()
-    plan = await ctx.planner.plan(ctx.user, target)
-    ctx.plan = plan
-    tz = ctx.user.timezone
-    return {
-        "day": f"{target:%d.%m}",
-        "planned": [{"time": f"{to_local(i.at, tz):%H:%M}", "title": i.task.title} for i in plan.items],
-        "not_fitted": [t.title for t in plan.skipped],
-        "note": "План с кнопкой «Поставить напоминания» пользователь увидит отдельным сообщением. "
-                "Ответь одной фразой: план ниже, подходит ли. Сам ничего не переставляй."
-                if plan.items else "Планировать нечего: дел без времени и просроченных нет — так и скажи.",
-    }
-
-
-# --- близкие ---
-
-
 async def _find_person(ctx: ToolContext, person: str):
     people = await ctx.repo.connections(ctx.user.id)
     if not people:
@@ -968,15 +943,6 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
         ToolSpec("delete_list", "Удалить список целиком — только если пользователь прямо просит.",
                  {"type": "object", "properties": {"list": _LIST}, "required": ["list"]}),
         delete_list,
-    ),
-    "plan_day": (
-        ToolSpec("plan_day",
-                 "«Спланируй мой день / распланируй завтра»: разложить дела без времени и просроченные по свободным "
-                 "окнам дня с учётом распорядка и привычек. Пользователь подтвердит план кнопкой.",
-                 {"type": "object",
-                  "properties": {"day": {**_DAY, "description": "Какой день планировать: today (по умолчанию), "
-                                                                "tomorrow или день недели"}}}),
-        plan_day,
     ),
     "share_list": (
         ToolSpec("share_list", "Сделать список общим с близким человеком: он увидит его и сможет отмечать и добавлять.",

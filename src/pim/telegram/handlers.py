@@ -12,13 +12,12 @@ from pim.agent.tools import with_reply
 from pim.telegram.format import md_to_html
 from pim.telegram.cards import delete_message, remember_card, remove_cards
 from pim.config import Settings
-from pim.core.models import TaskStatus, utcnow
+from pim.core.models import utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import format_local, to_local
 from pim.learning.timing import load_profile
 from pim.llm.base import Image
 from pim.reminders.digest import build_digest
-from pim.planning.day import apply_plan
 from pim.sharing import negotiation
 from pim.reminders.dates import CONGRATS_OFFSET, GIFT_OFFSET, UpcomingDate, reminder_at
 from pim.reminders.review import evening_review, postpone_all_to_tomorrow, postpone_to_tomorrow, review_context
@@ -30,7 +29,6 @@ from pim.telegram.keyboards import (
     AssignAction,
     DateAction,
     ListAction,
-    PlanAction,
     ReviewAction,
     TaskAction,
     DATE_CONGRATS,
@@ -46,8 +44,6 @@ from pim.telegram.keyboards import (
     lists_menu,
     memory_list,
     people_text,
-    plan_make_kb,
-    plan_message,
     review_messages,
     task_card,
 )
@@ -55,8 +51,6 @@ from pim.telegram.keyboards import (
 log = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
-# С этого часа /plan планирует уже завтрашний день
-PLAN_TOMORROW_FROM = 20
 
 
 MAX_QUOTE_CHARS = 1500
@@ -138,7 +132,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             "Запоминаю важное о тебе: сам из разговоров или по просьбе — «запомни, что мама — Ольга, ДР 12 марта». "
             "Посмотреть — /memory, удалить — «удали факт 3».\n\n"
             "/tasks — список дел\n/lists — списки (покупки, в поездку…)\n"
-            "/digest — сводка на сегодня\n/plan — спланировать день\n/review — разбор дня: несделанное на завтра\n"
+            "/digest — сводка на сегодня\n/review — разбор дня: несделанное на завтра\n"
             "/memory — что я о тебе знаю\n/habits — твои привычки по времени\n"
             "/people — близкие: поручения и общие списки\n/invite — пригласить близкого\n"
             "/reset — забыть контекст диалога\n\n"
@@ -152,50 +146,13 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     async def digest(message: Message):
         user = await ensure_user(message)
         d = await build_digest(repo, user, utcnow())
-        kb = plan_make_kb(d.day.date()) if d.undated or d.overdue else None
-        await message.answer(format_digest(d, user.timezone), reply_markup=kb)
+        await message.answer(format_digest(d, user.timezone))
 
-    async def make_plan(message: Message, user, day):
-        if agent.planner is None:
-            await message.answer("Планирование сейчас недоступно.")
-            return
-        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            try:
-                plan = await agent.planner.plan(user, day)
-            except Exception:
-                log.exception("planning failed")
-                await message.answer("Не получилось составить план, попробуй ещё раз.")
-                return
-        text, kb = plan_message(plan, user.timezone)
-        await message.answer(text, reply_markup=kb)
-
-    @router.message(Command("plan"))
-    async def plan(message: Message):
-        user = await ensure_user(message)
-        local = to_local(utcnow(), user.timezone)
-        # вечером планируем уже завтра
-        day = local.date() + timedelta(days=1) if local.hour >= PLAN_TOMORROW_FROM else local.date()
-        await make_plan(message, user, day)
-
-    @router.callback_query(PlanAction.filter())
-    async def on_plan_action(cb: CallbackQuery, callback_data: PlanAction):
-        user = await ensure_user(cb)
-        if callback_data.action == "make":
-            await cb.answer()
-            await make_plan(cb.message, user, datetime.strptime(str(callback_data.day), "%Y%m%d").date())
-            return
-        if callback_data.action == "cancel":
-            await cb.message.edit_text(f"{cb.message.html_text}\n\n✖️ Не применяю — дела остались как были",
-                                       reply_markup=None)
-            await cb.answer()
-            return
-        moved = await apply_plan(repo, user, callback_data.plan_id)
-        if moved is None:
-            await cb.answer("Этого плана уже нет")
-            return
-        note = f"✅ Готово: поставил время и напоминания для {moved} дел" if moved else "План уже применён"
-        await cb.message.edit_text(f"{cb.message.html_text}\n\n{note}", reply_markup=None)
-        await cb.answer()
+    @router.callback_query(F.data.startswith("p:"))
+    async def on_old_plan_button(cb: CallbackQuery):
+        """Кнопки из сообщений «План на …» — планирование дня убрано."""
+        await cb.answer("Планирование дня больше не работает")
+        await cb.message.edit_reply_markup(reply_markup=None)
 
     @router.message(Command("review"))
     async def review(message: Message):
@@ -513,9 +470,6 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
                 await remember_card(repo, t.id, card)
         for list_id in reply.lists_touched:
             await show_list_card(message, user, list_id)
-        if reply.plan is not None:
-            text, kb = plan_message(reply.plan, user.timezone)
-            await message.answer(text, reply_markup=kb)
 
     @router.callback_query(TaskAction.filter())
     async def on_action(cb: CallbackQuery, callback_data: TaskAction):

@@ -15,7 +15,6 @@ from pim.core.repository import Repository
 from pim.core.timeutils import WEEKDAYS_RU, format_local, to_local
 from pim.learning.timing import TimeProfile, load_profile
 from pim.llm.base import Image, LLMProvider, Message
-from pim.planning.day import DayPlanner, Plan
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +80,6 @@ class AgentReply:
     touched: list[Task] = field(default_factory=list)
     auto_time: set[int] = field(default_factory=set)
     lists_touched: list[int] = field(default_factory=list)
-    plan: Plan | None = None
 
 
 class History:
@@ -114,21 +112,16 @@ class History:
 
 class Agent:
     def __init__(self, llm: LLMProvider, repo: Repository, history: History, max_memories: int = 150,
-                 planner: DayPlanner | None = None, searcher=None, searches_per_turn: int = 3):
+                 searcher=None, searches_per_turn: int = 3):
         self._llm = llm
         self._searcher = searcher
         self._searches_per_turn = searches_per_turn
-        self._planner = planner
         self._max_memories = max_memories
         self._repo = repo
         self.history = history
         self._specs = [spec for spec, _ in TOOLS.values()]
         # Сообщения одного пользователя обрабатываются строго по очереди, разные пользователи — параллельно
         self._locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
-
-    @property
-    def planner(self) -> DayPlanner | None:
-        return self._planner
 
     async def handle(self, user: User, text: str) -> AgentReply:
         async with self._locks[user.id]:
@@ -221,7 +214,7 @@ class Agent:
         profile = await load_profile(self._repo, user)
         ctx = ToolContext(repo=self._repo, user=user, user_text=own_words(text), prev_assistant=prev_assistant,
                           max_memories=self._max_memories, reference_time=reference_time, profile=profile,
-                          planner=self._planner, adjust_task=adjust_task,
+                          adjust_task=adjust_task,
                           searcher=self._searcher, searches_left=self._searches_per_turn)
         # в историю уходит только текст (с пометкой «[Фото…]»), сама картинка — только в этот ход
         user_msg = Message("user", text, images=images)
@@ -255,5 +248,4 @@ class Agent:
             log.info("user %s: replaced off-topic code reply", user.id)
             reply = OFF_TOPIC_REPLY
         await self.history.add(user.id, Message("user", text), Message("assistant", reply))
-        return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time, lists_touched=ctx.lists_touched,
-                          plan=ctx.plan)
+        return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time, lists_touched=ctx.lists_touched)

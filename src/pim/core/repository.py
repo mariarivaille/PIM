@@ -10,7 +10,6 @@ from pim.core.models import (
     ChatMessage,
     TaskCard,
     DateAlert,
-    DayPlan,
     Connection,
     Invite,
     ItemList,
@@ -529,25 +528,6 @@ class Repository:
         async with self._sm() as s, s.begin():
             for item in await s.scalars(select(ListItem).where(ListItem.id.in_(item_ids))):
                 item.notified = True
-
-    # --- план дня ---
-
-    async def save_day_plan(self, user_id: int, day: str, items: str) -> DayPlan:
-        async with self._sm() as s, s.begin():
-            plan = DayPlan(user_id=user_id, day=day, items=items)
-            s.add(plan)
-        return plan
-
-    async def get_day_plan(self, user_id: int, plan_id: int) -> DayPlan | None:
-        async with self._sm() as s:
-            plan = await s.get(DayPlan, plan_id)
-            return plan if plan and plan.user_id == user_id else None
-
-    async def mark_plan_applied(self, plan_id: int) -> None:
-        async with self._sm() as s, s.begin():
-            plan = await s.get(DayPlan, plan_id)
-            if plan:
-                plan.applied_at = utcnow()
 
     # --- рефлексия: какую переписку ещё не разбирали ---
 
