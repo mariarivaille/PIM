@@ -120,8 +120,11 @@ class Task(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     title: Mapped[str] = mapped_column(String(500))
     notes: Mapped[str | None] = mapped_column(Text)
-    # Когда напомнить; None = задача без напоминания
+    # Когда дело (маникюр в 12:00); None = без срока и без напоминания
     due_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    # Когда напомнить, если заранее (дорога, сборы, «за день»); None = в момент дела. При переносе дела
+    # сдвигается вместе с ним (Repository.update_task)
+    remind_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # RFC 5545 RRULE без DTSTART, например "FREQ=WEEKLY;BYDAY=TU,TH"
     rrule: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[TaskStatus] = mapped_column(String(16), default=TaskStatus.OPEN, index=True)

@@ -582,9 +582,10 @@ class Repository:
         due_at: datetime | None = None,
         rrule: str | None = None,
         notes: str | None = None,
+        remind_at: datetime | None = None,
     ) -> Task:
         async with self._sm() as s, s.begin():
-            task = Task(user_id=user_id, title=title, due_at=due_at, rrule=rrule, notes=notes)
+            task = Task(user_id=user_id, title=title, due_at=due_at, rrule=rrule, notes=notes, remind_at=remind_at)
             s.add(task)
         return task
 
@@ -607,9 +608,13 @@ class Repository:
             task = await s.get(Task, task_id)
             if not task or task.user_id != user_id:
                 return None
+            old_due, old_remind = task.due_at, task.remind_at
             for k, v in fields.items():
                 setattr(task, k, v)
-            if "due_at" in fields:
+            if "due_at" in fields and "remind_at" not in fields and old_remind and old_due:
+                # перенесли дело — напоминание едет вместе с ним, с тем же запасом
+                task.remind_at = task.due_at - (old_due - old_remind) if task.due_at else None
+            if "due_at" in fields or "remind_at" in fields:
                 task.reminded_at = None
             return task
 
@@ -626,6 +631,8 @@ class Repository:
             reaction = int((now - task.reminded_at).total_seconds() // 60) if task.reminded_at else None
             s.add(TaskEvent(user_id=user_id, task_id=task.id, kind=TaskEventKind.DONE, at=now, minutes=reaction))
             if nxt:
+                if task.remind_at:
+                    task.remind_at = nxt - (task.due_at - task.remind_at)
                 task.due_at = nxt
                 task.reminded_at = None
             else:
@@ -652,7 +659,13 @@ class Repository:
             return cards
 
     async def snooze_task(self, user_id: int, task_id: int, until: datetime) -> Task | None:
-        task = await self.update_task(user_id, task_id, due_at=until)
+        """«Отложить»: двигает напоминание. Если оно было заранее и отложили не дальше самого дела —
+        дело остаётся на месте (маникюр в 12:00, напомнить ещё раз в 11:30); иначе переносится дело."""
+        task = await self.get_task(user_id, task_id)
+        if task and task.remind_at and task.due_at and until < task.due_at:
+            task = await self.update_task(user_id, task_id, remind_at=until)
+        else:
+            task = await self.update_task(user_id, task_id, due_at=until, remind_at=None)
         if task:
             now = utcnow()
             await self.log_event(user_id, TaskEventKind.SNOOZED, now, task_id=task_id,
@@ -688,10 +701,10 @@ class Repository:
                 .where(
                     Task.status == TaskStatus.OPEN,
                     Task.due_at.is_not(None),
-                    Task.due_at <= now,
+                    func.coalesce(Task.remind_at, Task.due_at) <= now,
                     Task.reminded_at.is_(None),
                 )
-                .order_by(Task.due_at)
+                .order_by(func.coalesce(Task.remind_at, Task.due_at))
             )
             return [(t, u) for t, u in res.all()]
 

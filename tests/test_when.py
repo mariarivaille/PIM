@@ -119,9 +119,63 @@ async def test_remind_before_event(repo, user):
     res = await run_tool(ctx, "create_task", {"title": "собрание", "due_at": "2030-11-13T18:00",
                                                "remind_before_minutes": 1440, "notes": "каб. 214"})
     task = ctx.touched[0]
-    assert to_local(task.due_at, TZ).strftime("%d.%m %H:%M") == "12.11 18:00"
-    assert task.notes.startswith("Само событие: ") and "13.11 18:00" in task.notes and task.notes.endswith("каб. 214")
-    assert res["created"]["remind_at"].endswith("12.11 18:00") and res["created"]["event_at"].endswith("13.11 18:00")
+    assert to_local(task.due_at, TZ).strftime("%d.%m %H:%M") == "13.11 18:00"  # время дела не трогаем
+    assert to_local(task.remind_at, TZ).strftime("%d.%m %H:%M") == "12.11 18:00"
+    assert task.notes == "каб. 214"
+    assert res["created"]["remind_at"].endswith("12.11 18:00") and res["created"]["remind_before"] == "1 день"
+
+
+async def test_going_out_gets_lead_time(repo, user):
+    from datetime import timedelta
+    ctx = ToolContext(repo, user)
+    args = {"title": "маникюр", "due_at": "2030-11-23T12:00"}
+    assert "дороги" in (await run_tool(ctx, "create_task", args))["error"]  # просим подумать о дороге
+    await run_tool(ctx, "create_task", {**args, "remind_before_minutes": 45})
+    task = ctx.touched[0]
+    assert to_local(task.remind_at, TZ).strftime("%H:%M") == "11:15"
+    # звенит в 11:15, а не в 12:00
+    assert [t.id for t, _ in await repo.due_tasks(task.remind_at)] == [task.id]
+    assert await repo.due_tasks(task.remind_at - timedelta(minutes=1)) == []
+    # звонок — без запаса и без вопросов
+    ctx2 = ToolContext(repo, user)
+    await run_tool(ctx2, "create_task", {"title": "позвонить маме", "due_at": "2030-11-23T12:00"})
+    assert ctx2.touched[0].remind_at is None
+
+
+async def test_lead_time_moves_with_task(repo, user):
+    from datetime import timedelta
+    task = await repo.create_task(user.id, "маникюр", due_at=parse_local("2030-11-23T12:00", TZ),
+                                  remind_at=parse_local("2030-11-23T11:15", TZ))
+    # перенос дела — напоминание едет следом с тем же запасом
+    moved = await run_tool(ToolContext(repo, user), "update_task", {"task_id": task.id, "time": "15:00"})
+    assert moved["updated"]["remind_at"].endswith("14:15")
+    # «отложить на 15 мин» под напоминанием — двигается только напоминание
+    snoozed = await repo.snooze_task(user.id, task.id, parse_local("2030-11-23T14:30", TZ))
+    assert to_local(snoozed.due_at, TZ).strftime("%H:%M") == "15:00"
+    assert to_local(snoozed.remind_at, TZ).strftime("%H:%M") == "14:30"
+    # отложили дальше самого дела — переносится дело
+    later = await repo.snooze_task(user.id, task.id, parse_local("2030-11-24T10:00", TZ))
+    assert to_local(later.due_at, TZ).strftime("%d.%m %H:%M") == "24.11 10:00" and later.remind_at is None
+    # пользователь просит другой запас
+    res = await run_tool(ToolContext(repo, user), "update_task", {"task_id": task.id, "remind_before_minutes": 60})
+    assert res["updated"]["remind_at"].endswith("09:00")
+    res = await run_tool(ToolContext(repo, user), "update_task", {"task_id": task.id, "remind_before_minutes": 0})
+    assert "remind_at" not in res["updated"]
+
+
+async def test_recurring_keeps_lead_time(repo, user):
+    task = await repo.create_task(user.id, "спортзал", due_at=parse_local("2026-11-16T19:00", TZ),
+                                  rrule="FREQ=WEEKLY", remind_at=parse_local("2026-11-16T18:15", TZ))
+    nxt = await repo.complete_task(user.id, task.id, TZ)
+    assert to_local(nxt.remind_at, TZ).strftime("%d.%m %H:%M") == "23.11 18:15"
+
+
+def test_lead_text():
+    from datetime import timedelta
+    from pim.agent.tools import lead_text
+    assert lead_text(timedelta(minutes=45)) == "45 мин"
+    assert lead_text(timedelta(minutes=90)) == "1 ч 30 мин"
+    assert lead_text(timedelta(days=2)) == "2 дня"
 
 
 def test_strip_time_words():
@@ -165,8 +219,11 @@ async def test_explicit_no_deadline_is_respected(repo, user):
 
 async def test_repeated_task_is_not_duplicated(repo, user):
     ctx = ToolContext(repo, user)
-    await run_tool(ctx, "create_task", {"title": "забрать права", "due_at": "2030-11-17T10:00"})
-    res = await run_tool(ToolContext(repo, user), "create_task", {"title": "Забрать права", "due_at": "2030-11-17T12:00"})
+    await run_tool(ctx, "create_task", {"title": "забрать права", "due_at": "2030-11-17T10:00",
+                                        "remind_before_minutes": 0})
+    res = await run_tool(ToolContext(repo, user), "create_task", {"title": "Забрать права", "due_at": "2030-11-17T12:00",
+                                                                  "remind_before_minutes": 0})
     assert "already_exists" in res and len(await repo.list_open_tasks(user.id)) == 1
-    await run_tool(ToolContext(repo, user), "create_task", {"title": "забрать права", "due_at": "2030-11-24T10:00"})
+    await run_tool(ToolContext(repo, user), "create_task", {"title": "забрать права", "due_at": "2030-11-24T10:00",
+                                                            "remind_before_minutes": 0})
     assert len(await repo.list_open_tasks(user.id)) == 2  # другой день — отдельное дело

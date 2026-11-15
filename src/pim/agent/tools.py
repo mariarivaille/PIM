@@ -22,6 +22,7 @@ from pim.core.timeutils import (
     humanize_until,
     nearest_reasonable_time,
     parse_local,
+    plural_ru,
     resolve_day_time,
     strip_time_words,
     to_local,
@@ -65,6 +66,7 @@ class ToolContext:
     # черновики текстов (поздравления, письма) — телеграм-слой пришлёт каждый отдельным сообщением
     drafts: list[str] = field(default_factory=list)
     asked_draft_details: bool = False
+    asked_lead_time: bool = False
     # привычки по времени (learning/timing.py) — для времени по умолчанию
     profile: TimeProfile | None = None
     # поиск в интернете (search/web.py); None — выключен. searches_left — сколько поисков ещё можно за ход
@@ -119,12 +121,33 @@ def memory_requested(ctx: "ToolContext") -> bool:
     return MEMORY_OFFER.lower() in ctx.prev_assistant.lower() and bool(AFFIRMATIVE.match(ctx.user_text))
 
 
+# Дела, на которые надо куда-то идти или ехать: напоминание в момент дела — уже поздно
+GOING_OUT = re.compile(
+    r"сходить|съездить|сгонять|поехать|пойти|забрать|отвезти|отнести|встреч|врач|стоматолог|зубн|терапевт|"
+    r"анализ|маникюр|педикюр|стрижк|парикмахер|салон|барбер|мфц|почт|пвз|пункт выдачи|аэропорт|вокзал|"
+    r"поезд|самол[её]т|кино|театр|концерт|ресторан|кафе|спортзал|тренировк|бассейн|приём|прием|собеседован",
+    re.IGNORECASE,
+)
+
+
+def lead_text(delta: timedelta) -> str:
+    """За сколько до дела напомнить: «45 мин», «1 ч 30 мин», «1 день»."""
+    minutes = int(delta.total_seconds() // 60)
+    if minutes >= 24 * 60 and minutes % (24 * 60) == 0:
+        days = minutes // (24 * 60)
+        return f"{days} {plural_ru(days, 'день', 'дня', 'дней')}"
+    hours, rest = divmod(minutes, 60)
+    if not hours:
+        return f"{rest} мин"
+    return f"{hours} ч" + (f" {rest} мин" if rest else "")
+
+
 class ToolError(Exception):
     """Ошибка, которую стоит показать модели, чтобы она поправилась."""
 
 
 def task_view(task: Task, tz: str) -> dict[str, Any]:
-    return {
+    view = {
         "id": task.id,
         "title": task.title,
         "due": format_local(task.due_at, tz) if task.due_at else None,
@@ -132,6 +155,10 @@ def task_view(task: Task, tz: str) -> dict[str, Any]:
         "notes": task.notes,
         "status": task.status,
     }
+    if task.remind_at and task.due_at:
+        view["remind_at"] = format_local(task.remind_at, tz)
+        view["remind_before"] = lead_text(task.due_at - task.remind_at)
+    return view
 
 
 def _parse_due(ctx: ToolContext, value: str) -> tuple[datetime, bool]:
@@ -315,13 +342,20 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
-    event_at = None
+    if (remind_before_minutes is None and due and not ctx.asked_lead_time and due > utcnow()
+            and GOING_OUT.search(title)):
+        # «маникюр в 12» без запаса — напоминание придёт, когда уже пора быть на месте
+        ctx.asked_lead_time = True
+        raise ToolError(
+            "похоже, на это дело нужно куда-то идти или ехать. Реши, за сколько напомнить, с учётом дороги и сборов "
+            "(память: где живёт пользователь, на чём ездит; обычно 30–90 мин; дальняя поездка или подготовка — "
+            "больше) и вызови create_task ещё раз с remind_before_minutes. Если ехать никуда не нужно — "
+            "remind_before_minutes=0"
+        )
+    remind_at = None
     if remind_before_minutes and due:
-        # «напомни за день до собрания»: вычитает код, а не модель; когда само событие — в заметке
-        event_at = due
-        due = event_at - timedelta(minutes=int(remind_before_minutes))
-        when = f"Само событие: {format_local(event_at, ctx.user.timezone)}"
-        notes = f"{when}. {notes}" if notes else when
+        # «за час», «на дорогу 45 мин»: вычитает код; due_at остаётся временем самого дела
+        remind_at = due - timedelta(minutes=int(remind_before_minutes))
     if due:
         title = strip_time_words(title)  # время — в сроке, в названии оно устареет при первом переносе
     if not rrule and (dup := _find_duplicate(await ctx.repo.open_tasks_of(ctx.user.id), title, due,
@@ -329,7 +363,8 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         return {"already_exists": task_view(dup, ctx.user.timezone),
                 "note": "такое дело уже записано — второе не создавал; скажи об этом пользователю. "
                         "Если нужно другое время или детали — update_task"}
-    task = await ctx.repo.create_task(ctx.user.id, title=title, due_at=due, rrule=rrule, notes=notes)
+    task = await ctx.repo.create_task(ctx.user.id, title=title, due_at=due, rrule=rrule, notes=notes,
+                                      remind_at=remind_at)
     if due and due <= utcnow():
         # срок уже прошёл (обычно из пересланного сообщения): дело видно в сводке как просроченное,
         # но отдельно не звенит — бот и так сказал об этом в ответе
@@ -337,13 +372,8 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
     ctx.touched.append(task)
     if due and not auto and not in_minutes and due > utcnow():
         # пользователь сам назвал время — сигнал, в какие часы ему удобно (см. learning/timing.py)
-        await ctx.repo.log_event(ctx.user.id, TaskEventKind.PLANNED, event_at or due, task_id=task.id)
-    view = _due_view(ctx, task, auto)
-    if event_at:
-        # чтобы модель не выдала время напоминания за время события
-        view["event_at"] = format_local(event_at, ctx.user.timezone)
-        view["remind_at"] = view.pop("due")
-    return {"created": view}
+        await ctx.repo.log_event(ctx.user.id, TaskEventKind.PLANNED, due, task_id=task.id)
+    return {"created": _due_view(ctx, task, auto)}
 
 
 async def list_tasks(ctx: ToolContext) -> dict:
@@ -353,7 +383,8 @@ async def list_tasks(ctx: ToolContext) -> dict:
 
 async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, due_at: str | None = None,
                       day: str | None = None, time: str | None = None, in_minutes: int | None = None,
-                      rrule: str | None = None, notes: str | None = None, time_guessed: bool = False) -> dict:
+                      rrule: str | None = None, notes: str | None = None, time_guessed: bool = False,
+                      remind_before_minutes: int | None = None) -> dict:
     task = await _get(ctx, task_id)
     fields: dict[str, Any] = {}
     auto = False
@@ -378,6 +409,11 @@ async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, 
         fields["rrule"] = _check_rrule(rrule)
     if notes is not None:
         fields["notes"] = notes or None
+    if remind_before_minutes is not None:
+        due = fields.get("due_at") or task.due_at
+        if remind_before_minutes and not due:
+            raise ToolError("у дела нет времени — сначала задай его, потом «за сколько напомнить»")
+        fields["remind_at"] = due - timedelta(minutes=int(remind_before_minutes)) if remind_before_minutes else None
     if fields.get("title") or "due_at" in fields:
         # «обнять в обед», перенесённое на 20:00, — противоречие: время в названии убираем
         cleaned = strip_time_words(fields.get("title") or task.title)
@@ -782,6 +818,13 @@ _FROM_FORWARDED = {
     "description": "Только для пересланных сообщений: true — день/время взяты из текста пересланного («завтра» в нём "
                    "считается от даты отправки); false — из подписи самого пользователя (считается от «сейчас»)",
 }
+_REMIND_BEFORE = {
+    "type": "integer",
+    "description": "За сколько минут до дела напомнить. Время САМОГО дела — в day/time/due_at как есть, вычитать "
+                   "сам не нужно. Звонок, онлайн, дела дома — 0 (в момент дела). Куда-то идти или ехать (врач, "
+                   "маникюр, МФЦ, встреча, забрать посылку) — время на дорогу и сборы, обычно 30–90. "
+                   "Просят «за день» — 1440, «за час» — 60.",
+}
 _TIME_GUESSED = {
     "type": "boolean",
     "description": "true, если пользователь НЕ называл время и ты выбрал его сам по смыслу дела",
@@ -835,12 +878,7 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "notes": {"type": "string", "description": "Комментарий, если есть что сказать: контекст и "
                               "временные ограничения (срок, часы работы, «после работы»)"},
                     "date_from_forwarded": _FROM_FORWARDED,
-                    "remind_before_minutes": {
-                        "type": "integer",
-                        "description": "Если просят напомнить заранее («за день до», «за час»): время СОБЫТИЯ передай "
-                                       "в day/time/due_at как есть, а сюда — за сколько минут до него напомнить "
-                                       "(за час = 60, за день = 1440). Вычитать сам не нужно.",
-                    },
+                    "remind_before_minutes": _REMIND_BEFORE,
                 },
                 "required": ["title"],
             },
@@ -868,6 +906,8 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "due_at": _DUE,
                     "rrule": {**_RRULE, "description": _RRULE["description"] + " Пустая строка снимает повтор."},
                     "notes": {"type": "string", "description": "Новые заметки"},
+                    "remind_before_minutes": {**_REMIND_BEFORE, "description": _REMIND_BEFORE["description"]
+                                              + " 0 — напоминать в момент дела."},
                 },
                 "required": ["task_id"],
             },

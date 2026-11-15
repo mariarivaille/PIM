@@ -7,7 +7,8 @@ from aiogram.types import BotCommand, Message, TelegramObject
 
 from pim.agent.agent import Agent
 from pim.config import Settings
-from pim.core.models import ItemList, ListItem, Task, User
+from pim.core.models import ItemList, ListItem, Task, User, utcnow
+from pim.core.timeutils import humanize_until
 from pim.core.repository import Repository
 from pim.reminders.digest import Digest
 from pim.reminders.dates import UpcomingDate
@@ -67,8 +68,14 @@ class TelegramNotifier:
     async def send_reminder(self, user: User, task: Task, usual_snooze: int | None = None) -> None:
         if self._repo:  # прошлые карточки этого дела (повторяющееся — вчерашнее напоминание) больше не нужны
             await remove_cards(self._bot, self._repo, task.id)
+        now = utcnow()
+        if task.remind_at and task.due_at and task.due_at > now:
+            # напоминание заранее: главное — сколько осталось до самого дела
+            header = f"🔔 {humanize_until(task.due_at, now, user.timezone).capitalize()} — пора собираться"
+        else:
+            header = "🔔 Напоминаю"
         sent = await self._bot.send_message(
-            user.chat_id, "🔔 Напоминаю\n\n" + task_card(task, user.timezone),
+            user.chat_id, header + "\n\n" + task_card(task, user.timezone, show_remind=False),
             reply_markup=reminder_kb(task, usual_snooze),
         )
         if self._repo:

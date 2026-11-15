@@ -6,6 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from pim.core.models import ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
+from pim.agent.tools import lead_text
 from pim.learning.timing import MIN_HOUR_SAMPLES, MIN_SNOOZE_SAMPLES, WINDOW_DAYS, TimeProfile
 from pim.lists.matching import normalize
 from pim.reminders.dates import UpcomingDate, days_until_text
@@ -263,11 +264,16 @@ def snooze_options(usual: int | None) -> list[tuple[int, str]]:
     return [(usual, SNOOZE_LABELS[usual])] + rest[:2]
 
 
-def task_card(task: Task, tz: str, auto_time: bool = False) -> str:
+def task_card(task: Task, tz: str, auto_time: bool = False, show_remind: bool = True) -> str:
     parts = [f"<b>{html.escape(task.title)}</b>"]
     if task.due_at:
         until = humanize_until(task.due_at, utcnow(), tz) if task.status == TaskStatus.OPEN else ""
         parts.append(f"⏰ {format_local(task.due_at, tz)}" + (f" · {until}" if until else ""))
+        if show_remind and task.remind_at and task.status == TaskStatus.OPEN:
+            parts.append(f"🔔 напомню в {to_local(task.remind_at, tz):%H:%M}"
+                         + ("" if to_local(task.remind_at, tz).date() == to_local(task.due_at, tz).date()
+                            else f" {WEEKDAYS_RU[to_local(task.remind_at, tz).weekday()]}")
+                         + f" — за {lead_text(task.due_at - task.remind_at)}")
     if task.rrule:
         parts.append(f"🔁 {html.escape(task.rrule)}")
     if task.notes:

@@ -6,6 +6,10 @@ Pim — личный LLM-ассистент в Telegram (запись дел + �
 
 - Слои: `telegram/` → `agent/` → `llm/`, `core/`; `reminders/` → `core/`. Ядро (`core`, `agent`, `reminders`) не импортирует aiogram.
 - Время напоминания решает БД + `ReminderScheduler`, а не LLM.
+- У дела два времени: `due_at` — когда само дело, `remind_at` — когда напомнить, если заранее (дорога, «за день»).
+  Модель выбирает только `remind_before_minutes`, вычитает код; при переносе дела `remind_at` едет следом
+  (`Repository.update_task`), «отложить» до начала дела двигает только напоминание. Для выходов из дома без
+  запаса (`GOING_OUT` в `agent/tools.py`) модель один раз получает подсказку.
 - Даты тоже считает код: модель отдаёт `day`/`time`/`in_minutes`, `due_at` (ISO) — только для явной календарной даты.
   GigaChat ошибается с днями недели даже с календарём в промпте.
 - Все datetime — aware; в БД UTC (`UTCDateTime`). От LLM — локальное ISO без смещения → `parse_local`.
