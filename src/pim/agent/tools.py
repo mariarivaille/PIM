@@ -246,6 +246,22 @@ def _no_deadline_wanted(user_text: str) -> bool:
     return bool(_NO_DEADLINE.search(user_text))
 
 
+def _title_key(title: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]+", " ", title.casefold().replace("ё", "е"))).strip()
+
+
+def _find_duplicate(tasks: list[Task], title: str, due: datetime | None, tz: str) -> Task | None:
+    """То же дело уже открыто: то же название и тот же день (или у одного из них нет срока).
+    Бывает, когда пользователь повторяет сообщение, не дождавшись ответа или после сбоя."""
+    key = _title_key(title)
+    for t in tasks:
+        if _title_key(t.title) != key:
+            continue
+        if due is None or t.due_at is None or to_local(due, tz).date() == to_local(t.due_at, tz).date():
+            return t
+    return None
+
+
 async def _get(ctx: ToolContext, task_id: int) -> Task:
     if ctx.adjust_task is not None and int(task_id) == ctx.adjust_task.id:
         # корректировка поручения: поручивший правит дело, которое лежит у исполнителя — только это одно
@@ -315,6 +331,11 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         notes = f"{when}. {notes}" if notes else when
     if due:
         title = strip_time_words(title)  # время — в сроке, в названии оно устареет при первом переносе
+    if not rrule and (dup := _find_duplicate(await ctx.repo.open_tasks_of(ctx.user.id), title, due,
+                                             ctx.user.timezone)):
+        return {"already_exists": task_view(dup, ctx.user.timezone),
+                "note": "такое дело уже записано — второе не создавал; скажи об этом пользователю. "
+                        "Если нужно другое время или детали — update_task"}
     task = await ctx.repo.create_task(ctx.user.id, title=title, due_at=due, rrule=rrule, notes=notes)
     if due and due <= utcnow():
         # срок уже прошёл (обычно из пересланного сообщения): дело видно в сводке как просроченное,
@@ -620,6 +641,12 @@ async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | N
     due, _ = _resolve_due(ctx, due_at, day, time, in_minutes)
     if due:
         title = strip_time_words(title)
+    if dup := _find_duplicate(await ctx.repo.open_tasks_of(peer.id, assigned_by=ctx.user.id), title, due,
+                              ctx.user.timezone):
+        return {"already_assigned": {"to": conn.alias, "title": dup.title,
+                                     "due": format_local(dup.due_at, ctx.user.timezone) if dup.due_at else None},
+                "note": f"это уже поручено {conn.alias} и ещё не сделано — второе не создавал; скажи об этом "
+                        "пользователю"}
     # от кого — в заметке (видно и в карточке, и в напоминании, и в /tasks); имя — как исполнитель зовёт пользователя
     who = f"Просьба от {await ctx.repo.display_name(peer.id, ctx.user.id)}"
     task = await ctx.repo.create_assigned_task(peer.id, ctx.user.id, title=title, due_at=due,

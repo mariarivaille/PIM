@@ -440,6 +440,14 @@ class Repository:
             conn.nicknames = json.dumps(left, ensure_ascii=False) if left else None
             return True
 
+    async def open_tasks_of(self, user_id: int, assigned_by: int | None = None) -> list[Task]:
+        """Открытые дела пользователя; с assigned_by — только поручения от этого человека."""
+        async with self._sm() as s:
+            q = select(Task).where(Task.user_id == user_id, Task.status == TaskStatus.OPEN)
+            if assigned_by is not None:
+                q = q.where(Task.assigned_by == assigned_by)
+            return list(await s.scalars(q))
+
     async def create_assigned_task(self, assignee_id: int, assigned_by: int, title: str,
                                    due_at: datetime | None = None, notes: str | None = None) -> Task:
         async with self._sm() as s, s.begin():

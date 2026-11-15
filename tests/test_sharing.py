@@ -295,3 +295,15 @@ async def test_several_names_for_a_person(repo, user, pair):
     [(conn, _)] = await repo.connections(maria.id)
     assert conn.nickname_list == ["милый"]
     assert "Андрей Петров — ещё: милый" in people_text(await repo.connections(maria.id))
+
+
+async def test_repeated_assignment_is_not_duplicated(repo, user, pair):
+    maria, andrey = pair
+    args = {"person": "Андрей", "title": "подать на гражданство", "due_at": "2030-12-15T10:00"}
+    assert "assigned_to" in await run_tool(ToolContext(repo, maria), "assign_task", args)
+    res = await run_tool(ToolContext(repo, maria), "assign_task", {**args, "title": "Подать на гражданство!"})
+    assert "already_assigned" in res
+    assert len(await repo.list_open_tasks(andrey.id)) == 1
+    # другое дело или другой день — это уже не дубль
+    await run_tool(ToolContext(repo, maria), "assign_task", {**args, "due_at": "2031-01-15T10:00"})
+    assert len(await repo.list_open_tasks(andrey.id)) == 2

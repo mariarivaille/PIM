@@ -161,3 +161,12 @@ async def test_explicit_no_deadline_is_respected(repo, user):
     ctx = ToolContext(repo, user, user_text="запиши когда-нибудь выучить испанский")
     res = await run_tool(ctx, "create_task", {"title": "выучить испанский"})
     assert res["created"]["due"] is None
+
+
+async def test_repeated_task_is_not_duplicated(repo, user):
+    ctx = ToolContext(repo, user)
+    await run_tool(ctx, "create_task", {"title": "забрать права", "due_at": "2030-11-17T10:00"})
+    res = await run_tool(ToolContext(repo, user), "create_task", {"title": "Забрать права", "due_at": "2030-11-17T12:00"})
+    assert "already_exists" in res and len(await repo.list_open_tasks(user.id)) == 1
+    await run_tool(ToolContext(repo, user), "create_task", {"title": "забрать права", "due_at": "2030-11-24T10:00"})
+    assert len(await repo.list_open_tasks(user.id)) == 2  # другой день — отдельное дело
