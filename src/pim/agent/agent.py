@@ -48,15 +48,23 @@ _REFUSAL = re.compile(r"с этим я не помогаю", re.IGNORECASE)
 _TASKISH = re.compile(
     r"(?<!\w)(?:надо|нужно|необходимо|должн\w*|напомн\w*|запиши|записать|поставь|перенеси|отмени|удали|"
     r"сделал\w*|готово|купил\w*|забрал\w*|позвонил\w*|поручи|дело|дела|задач\w*|список|списк\w*|запомни|"
-    r"найди|найти|узнай|поищи|во сколько|где|сколько стоит|рецепт\w*|работает|погод\w*)(?!\w)",
+    r"найди|найти|узнай|поищи|во сколько|где|сколько стоит|рецепт\w*|работает|погод\w*|"
+    r"поздрав\w*|письм\w*|сообщени\w*|черновик\w*|заявлени\w*|составь|напиши)(?!\w)",
     re.IGNORECASE,
 )
 _NOT_OFF_TOPIC = ("Это не посторонняя просьба: пользователь говорит о своём деле или о деле близкого "
-                  "(записать, поручить, закрыть, перенести, напомнить) или просит найти информацию "
-                  "(тогда — web_search). Выполни это инструментами.")
+                  "(записать, поручить, закрыть, перенести, напомнить), просит найти информацию "
+                  "(тогда — web_search) или написать текст от его имени (тогда — show_draft). "
+                  "Выполни это инструментами.")
+
+
+_CODE_REQUEST = re.compile(r"код|функци|скрипт|программ|python|питон|sql|алгоритм|сочинени|эссе|реферат|переведи",
+                           re.IGNORECASE)
 
 
 def wrongly_refused(reply: str, user_words: str) -> bool:
+    if _CODE_REQUEST.search(user_words):
+        return False  # «напиши код / сочинение» — отказ правильный
     return bool(_REFUSAL.search(reply)) and bool(_TASKISH.search(user_words))
 
 
@@ -70,6 +78,8 @@ def location_hint(memories) -> str:
 
 def looks_like_code(text: str) -> bool:
     return bool(_CODE_FENCE.search(text)) or len(_CODE_LINE.findall(text)) >= 2
+# Черновик в истории диалога: его текст написал ассистент (рефлексия не берёт оттуда фактов)
+DRAFT_MARK = "[Черновик, показан пользователю]"
 # Пометка фото в тексте сообщения: модель понимает, что к нему приложена картинка
 PHOTO_MARK = "[Фото"
 
@@ -80,6 +90,7 @@ class AgentReply:
     touched: list[Task] = field(default_factory=list)
     auto_time: set[int] = field(default_factory=set)
     lists_touched: list[int] = field(default_factory=list)
+    drafts: list[str] = field(default_factory=list)
 
 
 class History:
@@ -242,10 +253,20 @@ class Agent:
         else:
             reply = "Не получилось довести дело до конца, попробуй переформулировать."
 
-        reply = reply.strip() or "Готово."
+        reply = reply.strip()
+        if DRAFT_MARK in reply:
+            # правку черновика («сделай короче») модель иногда пишет прямо в ответ, скопировав пометку из истории
+            before, _, draft = reply.partition(DRAFT_MARK)
+            if draft.strip():
+                ctx.drafts.append(draft.strip())
+            reply = before.strip() or "Вот новый вариант. Поправить ещё что-нибудь?"
+        reply = reply or "Готово."
         if looks_like_code(reply):
             # код Pim не пишет ни при каких условиях — промпту модель следует не всегда
             log.info("user %s: replaced off-topic code reply", user.id)
             reply = OFF_TOPIC_REPLY
-        await self.history.add(user.id, Message("user", text), Message("assistant", reply))
-        return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time, lists_touched=ctx.lists_touched)
+        # черновик — в историю, чтобы «сделай короче» правило именно его
+        shown = "".join(f"\n\n{DRAFT_MARK}\n{d}" for d in ctx.drafts)
+        await self.history.add(user.id, Message("user", text), Message("assistant", reply + shown))
+        return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time, lists_touched=ctx.lists_touched,
+                          drafts=ctx.drafts)

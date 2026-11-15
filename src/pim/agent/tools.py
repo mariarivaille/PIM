@@ -62,6 +62,9 @@ class ToolContext:
     date_from_forwarded: bool = True
     # id списков, изменённых или открытых за ход — телеграм-слой покажет их с чекбоксами
     lists_touched: list[int] = field(default_factory=list)
+    # черновики текстов (поздравления, письма) — телеграм-слой пришлёт каждый отдельным сообщением
+    drafts: list[str] = field(default_factory=list)
+    asked_draft_details: bool = False
     # привычки по времени (learning/timing.py) — для времени по умолчанию
     profile: TimeProfile | None = None
     # поиск в интернете (search/web.py); None — выключен. searches_left — сколько поисков ещё можно за ход
@@ -625,6 +628,36 @@ async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | N
                     + "; когда сделает — пользователю придёт уведомление"}
 
 
+MAX_DRAFT_CHARS = 3500  # с запасом под лимит сообщения Telegram (4096)
+
+
+def _facts_about(memories: list, to: str) -> list[str]:
+    """Факты памяти об адресате: «мама» → «Мама — Ольга, любит театр». Сравниваем по основе слова."""
+    stems = [w[:4] for w in re.findall(r"\w+", to.casefold()) if len(w) >= 3]
+    return [m.content for m in memories
+            if any(w.startswith(s) for s in stems for w in re.findall(r"\w+", m.content.casefold()))]
+
+
+async def show_draft(ctx: ToolContext, text: str, to: str = "") -> dict:
+    text = text.strip()
+    if not text:
+        raise ToolError("text пустой — передай сам текст черновика")
+    if len(text) > MAX_DRAFT_CHARS:
+        raise ToolError(f"черновик длиннее {MAX_DRAFT_CHARS} символов — сократи")
+    if to and not ctx.asked_draft_details and (facts := _facts_about(await ctx.repo.list_memories(ctx.user.id), to)):
+        # шаблонное «желаю здоровья и счастья» при том, что о человеке многое известно — модели так проще
+        words = {w for f in facts for w in re.findall(r"\w{5,}", f.casefold())} - {w for w in re.findall(r"\w+", to.casefold())}
+        if not any(w[:5] in text.casefold() for w in words):
+            ctx.asked_draft_details = True
+            raise ToolError("черновик шаблонный, а об адресате известно: " + "; ".join(facts[:5])
+                            + ". Вплети 1–2 из этих деталей естественно (не списком) и вызови show_draft ещё раз")
+    ctx.drafts.append(text)
+    return {"shown": True,
+            "note": "Пользователь видит черновик отдельным сообщением. Не повторяй текст в ответе: одной фразой "
+                    "перечисли, что подставить вместо [квадратных скобок], если они есть, и спроси, поправить ли. "
+                    "Отправлять ты не умеешь — не предлагай «Отправить?»; можно предложить напомнить отправить."}
+
+
 async def web_search(ctx: ToolContext, query: str) -> dict:
     if ctx.searcher is None:
         raise ToolError("поиск в интернете выключен — скажи пользователю, что сейчас искать не можешь")
@@ -1027,6 +1060,22 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
              "required": ["enabled"]},
         ),
         set_auto_memory,
+    ),
+    "show_draft": (
+        ToolSpec(
+            "show_draft",
+            "Показать пользователю готовый черновик текста от его имени: поздравление, письмо в УК или "
+            "организацию, сообщение человеку, заявление, отзыв. Текст придёт отдельным сообщением — "
+            "его удобно скопировать и переслать. Правки («короче», «теплее») — новый вызов с новым текстом.",
+            {"type": "object",
+             "properties": {
+                 "text": {"type": "string", "description": "Полный текст черновика, готовый к отправке, "
+                                                           "без пояснений вокруг"},
+                 "to": {"type": "string", "description": "Кому: «мама», «УК „Уютный дом“»"},
+             },
+             "required": ["text"]},
+        ),
+        show_draft,
     ),
     "web_search": (
         ToolSpec(

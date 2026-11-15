@@ -455,6 +455,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         await cb.answer()
 
     async def send_reply(message: Message, user, reply):
+        for draft in reply.drafts:
+            # черновик — отдельным сообщением и только сам текст: его копируют или пересылают адресату
+            await message.answer(html.escape(draft), link_preview_options=LinkPreviewOptions(is_disabled=True))
         await message.answer(md_to_html(reply.text), reply_markup=main_menu(),
                              link_preview_options=LinkPreviewOptions(is_disabled=True))
         # дедуп: одна задача могла быть затронута несколько раз за ход
