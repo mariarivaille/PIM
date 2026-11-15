@@ -4,6 +4,14 @@
 от 20 ГБ диска, публичный IPv4. Начальная настройка — `cloud-init.yaml` (вставить свой публичный ключ
 вместо `SSH_PUBLIC_KEY`).
 
+## Если cloud-init не применился
+
+Например, ключ добавлен в панели хостера, а user-data не вставлен: тогда вход есть только под `root`.
+Те же шаги из `cloud-init.yaml` выполняются вручную, в таком порядке, чтобы не потерять доступ:
+пользователь `admin` с ключом и sudo → проверить вход под ним → только потом закрыть вход под root и по паролю
+(`/etc/ssh/sshd_config.d/00-pim.conf`) → ufw, swap, unattended-upgrades → uv, клон, `.venv`, сервис, бэкап.
+Папка `/opt/pim` закрыта для всех, кроме `pim`: команды внутри — через `sudo -u pim -H sh -c "cd /opt/pim/app && …"`.
+
 ## После создания сервера
 
 ```sh
@@ -23,8 +31,8 @@ ssh admin@IP 'journalctl -u pim -f'   # логи
 ## Обновление
 
 ```sh
-ssh admin@IP 'cd /opt/pim/app && sudo -u pim git pull &&
-              sudo -u pim -H uv pip install --python .venv/bin/python -e . && sudo systemctl restart pim'
+ssh admin@IP 'sudo -u pim -H sh -c "cd /opt/pim/app && git pull -q &&
+              uv pip install -q --python .venv/bin/python -e ." && sudo systemctl restart pim'
 ```
 
 ## Резервные копии

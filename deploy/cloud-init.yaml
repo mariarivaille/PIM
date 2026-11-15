@@ -12,6 +12,8 @@ disable_root: true
 
 users:
   - name: admin
+    # в Ubuntu уже есть группа admin — без primary_group useradd падает
+    primary_group: admin
     groups: [sudo]
     shell: /bin/bash
     sudo: "ALL=(ALL) NOPASSWD:ALL"
@@ -84,6 +86,8 @@ write_files:
 
   - path: /etc/fail2ban/jail.d/sshd.local
     content: |
+      # если вход по ключу ещё не настроен, неудачные попытки банят ваш IP на 10 минут —
+      # добавьте свой IP в ignoreip: «ignoreip = 127.0.0.1/8 ::1 ВАШ_IP»
       [sshd]
       enabled = true
 
@@ -96,7 +100,7 @@ runcmd:
   - systemctl enable --now fail2ban
   # uv ставит Python 3.11 рядом с системным (в 26.04 он новее, а колёса faster-whisper есть не для всех версий)
   - curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
-  - mkdir -p /opt/pim && chown pim:pim /opt/pim
+  - mkdir -p /opt/pim && chown pim:pim /opt/pim && chmod 700 /opt/pim
   - sudo -u pim -H git clone --branch dev https://github.com/mariarivaille/PIM.git /opt/pim/app
   - cd /opt/pim/app && sudo -u pim -H uv venv --python 3.11 .venv
   - cd /opt/pim/app && sudo -u pim -H uv pip install --python .venv/bin/python -e .
