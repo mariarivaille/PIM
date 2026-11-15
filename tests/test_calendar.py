@@ -140,3 +140,12 @@ async def test_shift_off_busy_time_is_reported(repo, user):
     res = await run_tool(ctx, "create_task", {"title": "разобрать бумаги", "due_at": "2030-11-25T19:00",
                                               "time_guessed": True})
     assert "21:00" in res["created"]["moved_off_busy_time"]
+
+
+async def test_my_tasks_shows_upcoming_events(repo, user):
+    from pim.telegram.keyboards import tasks_text
+    event = await repo.create_event(user.id, title="Маникюр", starts_at=parse_local("2030-11-26T19:00", TZ),
+                                    ends_at=parse_local("2030-11-26T20:30", TZ))
+    occ = cal.expand([event], MON, MON + timedelta(days=14), TZ)
+    text = tasks_text([], TZ, occ)
+    assert "Открытых дел нет" in text and "вт 26.11 19:00–20:30 Маникюр" in text

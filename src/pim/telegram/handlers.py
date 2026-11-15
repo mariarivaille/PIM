@@ -29,6 +29,7 @@ from pim.telegram.keyboards import (
     CALENDAR_BUTTON,
     CALENDAR_DAYS,
     MY_TASKS_BUTTON,
+    UPCOMING_EVENTS_DAYS,
     EventAction,
     calendar_text,
     event_card,
@@ -306,7 +307,10 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     async def tasks(message: Message):
         user = await ensure_user(message)
         items = await repo.list_open_tasks(user.id)
-        await message.answer(tasks_text(items, user.timezone), reply_markup=main_menu())
+        start = to_local(utcnow(), user.timezone).replace(hour=0, minute=0, second=0, microsecond=0)
+        events = expand(await repo.list_events(user.id), max(start, utcnow()),
+                        start + timedelta(days=UPCOMING_EVENTS_DAYS), user.timezone)
+        await message.answer(tasks_text(items, user.timezone, events), reply_markup=main_menu())
         if items:
             await repo.add_messages(user.id, ("user", MY_TASKS_BUTTON),
                                     ("assistant", tasks_context(items, user.timezone)), at=utcnow())

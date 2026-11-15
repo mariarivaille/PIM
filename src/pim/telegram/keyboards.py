@@ -511,9 +511,14 @@ def calendar_text(occ: list[Occurrence], tasks: list[Task], start_day, tz: str) 
 
 
 
-def tasks_text(tasks: list[Task], tz: str) -> str:
-    """«Мои задачи»: нумерованный список с комментариями (номера понимает агент: «второе сделано»)."""
-    if not tasks:
+UPCOMING_EVENTS_DAYS = 14
+
+
+def tasks_text(tasks: list[Task], tz: str, events: list[Occurrence] | None = None) -> str:
+    """«Мои задачи»: нумерованный список дел с комментариями (номера понимает агент: «второе сделано»)
+    и ниже — ближайшие события календаря: иначе записанный в календарь маникюр выглядит «не созданным»."""
+    events = events or []
+    if not tasks and not events:
         return "Открытых дел нет 🎉"
     lines = ["📋 <b>Мои задачи</b>"]
     for i, t in enumerate(tasks, 1):
@@ -522,8 +527,17 @@ def tasks_text(tasks: list[Task], tz: str) -> str:
         lines.append(f"{i}. {html.escape(t.title)}{due}{rep}")
         if t.notes:
             lines.append(f"    <i>{html.escape(t.notes)}</i>")
-    lines.append("\nЧтобы закрыть или перенести — напиши, например: «второе сделано», «третье на пятницу».")
-    return "\n".join(lines)
+    if not tasks:
+        lines.append("Открытых дел нет 🎉")
+    if events:
+        lines.append(f"\n📅 <b>В календаре на {UPCOMING_EVENTS_DAYS} дней</b>")
+        for o in events:
+            start = to_local(o.start, tz)
+            lines.append(f"• {WEEKDAYS_RU[start.weekday()]} {start:%d.%m} {_event_time(o, tz)} "
+                         f"{html.escape(o.event.title)}" + (" 🔁" if o.event.rrule else ""))
+    if tasks:
+        lines.append("\nЧтобы закрыть или перенести — напиши, например: «второе сделано», «третье на пятницу».")
+    return _fit(lines)
 
 
 def tasks_context(tasks: list[Task], tz: str) -> str:
