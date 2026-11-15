@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from pim.agent.agent import Agent, History
+from pim.search.web import make_search
 from pim.config import get_settings
 from pim.core.db import init_db, make_engine, make_sessionmaker
 from pim.core.repository import Repository
@@ -35,7 +36,8 @@ async def main() -> None:
     history = History(repo, settings.history_size, ttl_seconds=settings.history_ttl_minutes * 60)
     llm = make_provider(settings)
     planner = DayPlanner(llm, repo)
-    agent = Agent(llm, repo, history, max_memories=settings.max_memories, planner=planner)
+    agent = Agent(llm, repo, history, max_memories=settings.max_memories, planner=planner,
+                  searcher=make_search(settings), searches_per_turn=settings.web_search_per_turn)
     transcriber = make_transcriber(settings)
     bot = make_bot(settings)
     dp = make_dispatcher(agent, repo, settings, transcriber)

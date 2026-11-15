@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Предел длины ответа: без него OpenRouter резервирует максимум модели (65k) и отказывает при малом балансе
     openrouter_max_tokens: int = 2048
+    # Поиск в интернете (инструмент web_search) — через OpenRouter, нужен OPENROUTER_API_KEY; off — выключить
+    web_search: Literal["openrouter", "off"] = "openrouter"
+    web_search_model: str = ""  # пусто — та же, что OPENROUTER_MODEL
+    web_search_results: int = 3
+    web_search_per_turn: int = 3  # предел поисков за одно сообщение пользователя — каждый поиск платный
 
     gigachat_credentials: str = ""
     # Готовый access-токен вместо ключа авторизации (живёт ограниченное время, бот его не обновляет)

@@ -69,6 +69,9 @@ class ToolContext:
     # «спланируй мой день»: планировщик и составленный за ход план (телеграм-слой покажет его с кнопками)
     planner: Any = None
     plan: Any = None
+    # поиск в интернете (search/web.py); None — выключен. searches_left — сколько поисков ещё можно за ход
+    searcher: Any = None
+    searches_left: int = 0
     # текст сообщения пользователя и предыдущий ответ бота: по ним проверяем, просил ли он что-то запомнить
     user_text: str = ""
     prev_assistant: str = ""
@@ -657,6 +660,21 @@ async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | N
                     + "; когда сделает — пользователю придёт уведомление"}
 
 
+async def web_search(ctx: ToolContext, query: str) -> dict:
+    if ctx.searcher is None:
+        raise ToolError("поиск в интернете выключен — скажи пользователю, что сейчас искать не можешь")
+    if ctx.searches_left <= 0:
+        raise ToolError("лимит поисков на это сообщение исчерпан — ответь по тому, что уже нашёл")
+    ctx.searches_left -= 1
+    today = to_local(utcnow(), ctx.user.timezone).strftime("%d.%m.%Y")
+    try:
+        result = await ctx.searcher.search(query, today)
+    except Exception as e:
+        log.exception("web search failed")
+        raise ToolError(f"поиск не удался ({type(e).__name__}) — скажи пользователю, что не получилось") from e
+    return {"answer": result.answer, "sources": result.sources[:5]}
+
+
 async def set_auto_memory(ctx: ToolContext, enabled: bool) -> dict:
     await ctx.repo.set_auto_memory(ctx.user.id, bool(enabled))
     ctx.user.auto_memory = bool(enabled)
@@ -1053,6 +1071,19 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
              "required": ["enabled"]},
         ),
         set_auto_memory,
+    ),
+    "web_search": (
+        ToolSpec(
+            "web_search",
+            "Поиск в интернете: часы работы и адреса («во сколько работает МФЦ на Ленина»), телефоны, цены, "
+            "рецепты, как что-то сделать, расписания, новости. Возвращает краткий ответ по найденному и источники. "
+            "Только когда без интернета не ответить: не для дел, списков и памяти.",
+            {"type": "object",
+             "properties": {"query": {"type": "string", "description": "Запрос как в поисковике, с городом, если "
+                                      "речь о месте: «МФЦ проспект Ленина Екатеринбург часы работы»"}},
+             "required": ["query"]},
+        ),
+        web_search,
     ),
 }
 

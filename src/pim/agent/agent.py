@@ -48,15 +48,25 @@ _CODE_LINE = re.compile(
 _REFUSAL = re.compile(r"с этим я не помогаю", re.IGNORECASE)
 _TASKISH = re.compile(
     r"(?<!\w)(?:надо|нужно|необходимо|должн\w*|напомн\w*|запиши|записать|поставь|перенеси|отмени|удали|"
-    r"сделал\w*|готово|купил\w*|забрал\w*|позвонил\w*|поручи|дело|дела|задач\w*|список|списк\w*|запомни)(?!\w)",
+    r"сделал\w*|готово|купил\w*|забрал\w*|позвонил\w*|поручи|дело|дела|задач\w*|список|списк\w*|запомни|"
+    r"найди|найти|узнай|поищи|во сколько|где|сколько стоит|рецепт\w*|работает|погод\w*)(?!\w)",
     re.IGNORECASE,
 )
 _NOT_OFF_TOPIC = ("Это не посторонняя просьба: пользователь говорит о своём деле или о деле близкого "
-                  "(записать, поручить, закрыть, перенести, напомнить). Выполни это инструментами.")
+                  "(записать, поручить, закрыть, перенести, напомнить) или просит найти информацию "
+                  "(тогда — web_search). Выполни это инструментами.")
 
 
 def wrongly_refused(reply: str, user_words: str) -> bool:
     return bool(_REFUSAL.search(reply)) and bool(_TASKISH.search(user_words))
+
+
+# Факты памяти о том, где живёт пользователь: Gemini не находит город в общем блоке памяти и переспрашивает
+_LOCATION = re.compile(r"жив[уеё]|город|переех|район|адрес|дом\w* на|рядом с домом", re.IGNORECASE)
+
+
+def location_hint(memories) -> str:
+    return "; ".join(f"«{m.content}»" for m in memories if _LOCATION.search(m.content))[:300]
 
 
 def looks_like_code(text: str) -> bool:
@@ -104,8 +114,10 @@ class History:
 
 class Agent:
     def __init__(self, llm: LLMProvider, repo: Repository, history: History, max_memories: int = 150,
-                 planner: DayPlanner | None = None):
+                 planner: DayPlanner | None = None, searcher=None, searches_per_turn: int = 3):
         self._llm = llm
+        self._searcher = searcher
+        self._searches_per_turn = searches_per_turn
         self._planner = planner
         self._max_memories = max_memories
         self._repo = repo
@@ -192,6 +204,7 @@ class Agent:
             to_local(utcnow(), user.timezone), user.timezone, user.digest_time, tasks_block, memories_block,
             auto_memory=user.auto_memory, review_time=user.review_time, lists_block=lists_block,
             habits_block="\n".join(profile.prompt_lines()), people_block=people_block,
+            location=location_hint(memories),
         ))
 
     async def _handle(self, user: User, text: str, reference_time: datetime | None = None,
@@ -209,7 +222,8 @@ class Agent:
         profile = await load_profile(self._repo, user)
         ctx = ToolContext(repo=self._repo, user=user, user_text=own_words(text), prev_assistant=prev_assistant,
                           max_memories=self._max_memories, reference_time=reference_time, profile=profile,
-                          planner=self._planner, adjust_task=adjust_task, require_notes=self.require_notes)
+                          planner=self._planner, adjust_task=adjust_task, require_notes=self.require_notes,
+                          searcher=self._searcher, searches_left=self._searches_per_turn)
         # в историю уходит только текст (с пометкой «[Фото…]»), сама картинка — только в этот ход
         user_msg = Message("user", text, images=images)
         messages = [await self._system_message(user, profile), *history, user_msg]

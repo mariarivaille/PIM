@@ -4,11 +4,12 @@ from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, LinkPreviewOptions, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from pim.agent.agent import Agent, ForwardedPart
 from pim.agent.tools import with_reply
+from pim.telegram.format import md_to_html
 from pim.telegram.cards import delete_message, remember_card, remove_cards
 from pim.config import Settings
 from pim.core.models import TaskStatus, utcnow
@@ -83,6 +84,15 @@ def replied_text(message: Message, text: str | None = None) -> str:
     if len(quoted) > MAX_QUOTE_CHARS:
         quoted = quoted[:MAX_QUOTE_CHARS] + "…"
     return with_reply(text, who, quoted)
+
+
+NO_CREDITS = ("У OpenRouter закончились кредиты, поэтому я сейчас не могу ответить. Пополни баланс "
+              "на openrouter.ai или переключи бота на GigaChat (LLM_PROVIDER=gigachat).")
+
+
+def llm_error_text(error: Exception, default: str) -> str:
+    """402 от OpenRouter — кончились деньги на ключе: это надо сказать прямо, «попробуй ещё раз» не поможет."""
+    return NO_CREDITS if getattr(error, "status_code", None) == 402 else default
 
 
 def forward_sender(origin, message: Message) -> str:
@@ -345,9 +355,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         async with ChatActionSender.typing(bot=first.bot, chat_id=first.chat.id):
             try:
                 reply = await agent.handle_forwarded_batch(user, parts, comment)
-            except Exception:
+            except Exception as e:
                 log.exception("forwarded batch failed")
-                await first.answer("Что-то пошло не так с пересланным, попробуй ещё раз.")
+                await first.answer(llm_error_text(e, "Что-то пошло не так с пересланным, попробуй ещё раз."))
                 return
         await send_reply(first, user, reply)
 
@@ -357,10 +367,10 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
             try:
                 reply = await agent.handle_photo(user, images, caption)
-            except Exception:
+            except Exception as e:
                 log.exception("photo processing failed")
-                await message.answer("Не получилось разобрать фото. Возможно, текущая модель не умеет "
-                                     "работать с картинками — напиши, что на нём, текстом.")
+                await message.answer(llm_error_text(e, "Не получилось разобрать фото. Возможно, текущая модель "
+                                                       "не умеет работать с картинками — напиши, что на нём, текстом."))
                 return
         await send_reply(message, user, reply)
 
@@ -423,9 +433,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
                     reply = await agent.handle_forwarded(user, text, forward_sender(origin, message), origin.date)
                 else:
                     reply = await agent.handle(user, text)
-        except Exception:
+        except Exception as e:
             log.exception("agent failed")
-            await message.answer("Что-то пошло не так с моделью, попробуй ещё раз.")
+            await message.answer(llm_error_text(e, "Что-то пошло не так с моделью, попробуй ещё раз."))
             return
         await send_reply(message, user, reply)
 
@@ -488,7 +498,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         await cb.answer()
 
     async def send_reply(message: Message, user, reply):
-        await message.answer(html.escape(reply.text), reply_markup=main_menu())
+        await message.answer(md_to_html(reply.text), reply_markup=main_menu(),
+                             link_preview_options=LinkPreviewOptions(is_disabled=True))
         # дедуп: одна задача могла быть затронута несколько раз за ход
         seen = {}
         for t in reply.touched:
