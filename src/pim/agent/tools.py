@@ -70,7 +70,6 @@ class ToolContext:
     drafts: list[str] = field(default_factory=list)
     asked_draft_details: bool = False
     asked_lead_time: bool = False
-    asked_event_kind: bool = False
     # события календаря, созданные или изменённые за ход — телеграм-слой покажет карточки
     events_touched: list = field(default_factory=list)
     # привычки по времени (learning/timing.py) — для времени по умолчанию
@@ -145,6 +144,21 @@ EVENT_LIKE = re.compile(
     r"поезд|самол[её]т|рейс",
     re.IGNORECASE,
 )
+_EVENT_MINUTES = [("маникюр|педикюр", 90), ("тренировк|спортзал|бассейн|йог", 90), ("кино", 120),
+                  ("концерт|спектакл|театр", 150)]
+
+
+def event_minutes(title: str) -> int:
+    """Сколько обычно длится запись или встреча, если длительность не названа."""
+    return next((m for pattern, m in _EVENT_MINUTES if re.search(pattern, title, re.IGNORECASE)), 60)
+
+
+def cap(title: str) -> str:
+    """Названия дел и событий — с большой буквы (остальное не трогаем: «МФЦ», «Андрей»)."""
+    title = title.strip()
+    return title[:1].upper() + title[1:]
+
+
 TODO_VERB = re.compile(
     r"(записат|позвонит|купит|оплатит|отменит|перенест|забронир|найти|узнат|выбрат|подготов|собрат|"
     r"заказат|написат|отправит|спросит|договорит|напомнит)",
@@ -378,12 +392,16 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         due, auto = nearest_reasonable_time(utcnow(), ctx.user.timezone), True
     else:
         due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
-    if due and not ctx.asked_event_kind and EVENT_LIKE.search(title) and not TODO_VERB.match(title.strip()):
-        # «маникюр в чт в 19» модель пишет делом, хотя это запись — она занимает время и должна быть в календаре
-        ctx.asked_event_kind = True
-        raise ToolError("это похоже на запись или встречу, которая занимает время (маникюр, врач, встреча…) — "
-                        "это событие календаря: вызови create_event (start, minutes, remind_before_minutes). "
-                        "Если это именно дело «сделать что-то» — повтори create_task")
+    if due and not auto and EVENT_LIKE.search(title) and not TODO_VERB.match(title.strip()):
+        # «маникюр в чт в 19» модель пишет делом, хотя это запись — она занимает время, ей место в календаре.
+        # Переспрашивать модель нельзя: Gemini пересказывает такие подсказки пользователю — переделываем сами
+        local = to_local(due, ctx.user.timezone)
+        result = await create_event(ctx, title=title, date=local.date().isoformat(), start=f"{local:%H:%M}",
+                                    minutes=event_minutes(title), rrule=rrule, notes=notes,
+                                    remind_before_minutes=remind_before_minutes)
+        result["note"] = (result.get("note", "") + " Это запись/встреча — записал её в календарь событием, "
+                          "а не делом; так и скажи.").strip()
+        return result
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
     if (remind_before_minutes is None and due and not ctx.asked_lead_time and due > utcnow()
@@ -414,6 +432,7 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         remind_at = due - timedelta(minutes=int(remind_before_minutes))
     if due:
         title = strip_time_words(title)  # время — в сроке, в названии оно устареет при первом переносе
+    title = cap(title)
     if not rrule and (dup := _find_duplicate(await ctx.repo.open_tasks_of(ctx.user.id), title, due,
                                              ctx.user.timezone)):
         return {"already_exists": task_view(dup, ctx.user.timezone),
@@ -478,7 +497,7 @@ async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, 
         fields["remind_at"] = due - timedelta(minutes=int(remind_before_minutes)) if remind_before_minutes else None
     if fields.get("title") or "due_at" in fields:
         # «обнять в обед», перенесённое на 20:00, — противоречие: время в названии убираем
-        cleaned = strip_time_words(fields.get("title") or task.title)
+        cleaned = cap(strip_time_words(fields.get("title") or task.title))
         if cleaned != task.title:
             fields["title"] = cleaned
     conflict_view = shifted_note = None
@@ -727,6 +746,7 @@ async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | N
     due, _ = _resolve_due(ctx, due_at, day, time, in_minutes)
     if due:
         title = strip_time_words(title)
+    title = cap(title)
     if dup := _find_duplicate(await ctx.repo.open_tasks_of(peer.id, assigned_by=ctx.user.id), title, due,
                               ctx.user.timezone):
         return {"already_assigned": {"to": conn.alias, "title": dup.title,
@@ -852,7 +872,7 @@ async def create_event(ctx: ToolContext, title: str, day: str | None = None, dat
     if remind_before_minutes is None and not all_day:
         remind_before_minutes = 0  # хотя бы в момент начала
     events = await ctx.repo.list_events(ctx.user.id)
-    title = strip_time_words(title)
+    title = cap(strip_time_words(title))
     for e in events:
         if cal_key(e.title) == cal_key(title) and e.starts_at == starts_at:
             return {"already_exists": event_view(e, tz), "note": "такое событие уже есть — второе не создавал"}
@@ -904,7 +924,7 @@ async def update_event(ctx: ToolContext, event_id: int, title: str | None = None
     if all_day is not None:
         fields["all_day"] = all_day
     if title:
-        fields["title"] = strip_time_words(title)
+        fields["title"] = cap(strip_time_words(title))
     if rrule is not None:
         fields["rrule"] = _check_rrule(rrule)
     if location is not None:

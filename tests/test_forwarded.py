@@ -74,7 +74,7 @@ async def test_past_deadline_is_not_reminded(repo, user):
     ctx = ToolContext(repo, user, reference_time=parse_local("2026-11-06T18:40", TZ))
     await run_tool(ctx, "create_task", {"title": "отчёт", "day": "today", "time": "18:00"})
     assert await repo.due_tasks(utcnow()) == []  # не звенит
-    assert [t.title for t in await repo.list_open_tasks(user.id)] == ["отчёт"]  # но в списке есть
+    assert [t.title for t in await repo.list_open_tasks(user.id)] == ["Отчёт"]  # но в списке есть
 
 
 async def test_forwarded_remember_error_forbids_claiming(repo, user):

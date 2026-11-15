@@ -113,7 +113,7 @@ async def test_assign_task_and_outcome(repo, user, pair):
     sched = ReminderScheduler(repo, Notifier(), 30)
     await sched.tick_shared()
     await sched.tick_shared()
-    assert sent == [("assign", "Андрей Петров", "Мария", "купить хлеб")]
+    assert sent == [("assign", "Андрей Петров", "Мария", "Купить хлеб")]
 
     await repo.complete_task(andrey.id, task.id, TZ)
     await sched.tick_shared()
@@ -238,8 +238,8 @@ async def test_assigner_can_adjust_only_the_negotiated_task(repo, user, pair):
 
     ctx = ToolContext(repo, maria, adjust_task=task)
     res = await run_tool(ctx, "update_task", {"task_id": task.id, "title": "купить хлеб и молоко"})
-    assert res["updated"]["title"] == "купить хлеб и молоко"
-    assert (await repo.get_task(andrey.id, task.id)).title == "купить хлеб и молоко"  # дело осталось у Андрея
+    assert res["updated"]["title"] == "Купить хлеб и молоко"
+    assert (await repo.get_task(andrey.id, task.id)).title == "Купить хлеб и молоко"  # дело осталось у Андрея
     assert "error" in await run_tool(ctx, "update_task", {"task_id": other.id, "title": "взлом"})
 
 

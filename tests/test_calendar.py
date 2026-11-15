@@ -45,19 +45,19 @@ async def test_create_event_tool(repo, user):
     res = await run_tool(ctx, "create_event", {"title": "маникюр", "date": "2030-11-23", "start": "12:00",
                                                "minutes": 90, "remind_before_minutes": 45, "location": "Ленина 5"})
     ev = res["created_event"]
-    assert ev["when"] == "сб 23.11 12:00–13:30 маникюр" and ev["next_reminder"].endswith("11:15")
+    assert ev["when"] == "сб 23.11 12:00–13:30 Маникюр" and ev["next_reminder"].endswith("11:15")
     again = await run_tool(ToolContext(repo, user), "create_event",
                            {"title": "Маникюр", "date": "2030-11-23", "start": "12:00", "remind_before_minutes": 45})
     assert "already_exists" in again
     # без длительности — час; «до» раньше «с» — через полночь
     res = await run_tool(ctx, "create_event", {"title": "созвон", "date": "2030-11-23", "start": "12:30",
                                                "remind_before_minutes": 0})
-    assert res["created_event"]["when"].endswith("12:30–13:30 созвон") and res["overlaps"]  # наложился на маникюр
+    assert res["created_event"]["when"].endswith("12:30–13:30 Созвон") and res["overlaps"]  # наложился на маникюр
     res = await run_tool(ctx, "create_event", {"title": "смена", "date": "2030-11-24", "start": "22:00",
                                                "end": "02:00", "remind_before_minutes": 0})
     assert "пн 25.11 02:00" in res["created_event"]["when"]
     res = await run_tool(ctx, "create_event", {"title": "отпуск", "date": "2030-12-01", "all_day": True, "days": 10})
-    assert res["created_event"]["when"] == "весь день вс 01.12–10.12 отпуск"
+    assert res["created_event"]["when"] == "весь день вс 01.12–10.12 Отпуск"
 
 
 async def test_update_and_cancel_event(repo, user):
@@ -71,7 +71,7 @@ async def test_update_and_cancel_event(repo, user):
     assert when.startswith("пт ") and "14:00–15:30" in when
     res = await run_tool(ctx, "update_event", {"event_id": eid, "start": "16:00"})
     assert "16:00–17:30" in res["updated_event"]["when"] and res["updated_event"]["next_reminder"].endswith("15:30")
-    assert (await run_tool(ctx, "cancel_event", {"event_id": eid}))["cancelled_event"] == "встреча с Олей"
+    assert (await run_tool(ctx, "cancel_event", {"event_id": eid}))["cancelled_event"] == "Встреча с Олей"
     assert await repo.list_events(user.id) == []
 
 

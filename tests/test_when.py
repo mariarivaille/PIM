@@ -192,14 +192,14 @@ def test_strip_time_words():
 async def test_title_has_no_time_after_create_or_move(repo, user):
     ctx = ToolContext(repo, user)
     res = await run_tool(ctx, "create_task", {"title": "обнять милую в обед", "day": "today", "time": "13:00"})
-    assert res["created"]["title"] == "обнять милую"
+    assert res["created"]["title"] == "Обнять милую"
     ctx.user_text = "подумать про отпуск в выходные, без срока"
     no_due = await run_tool(ctx, "create_task", {"title": "подумать про отпуск в выходные"})
-    assert no_due["created"]["title"] == "подумать про отпуск в выходные"  # без срока время — единственное место
+    assert no_due["created"]["title"] == "Подумать про отпуск в выходные"  # без срока время — единственное место
     # перенос дела, в названии которого осталось время, — название чистится
     task = await repo.create_task(user.id, "позвонить маме вечером", due_at=parse_local("2030-01-10T19:00", TZ))
     res = await run_tool(ctx, "update_task", {"task_id": task.id, "time": "10:00"})
-    assert res["updated"]["title"] == "позвонить маме"
+    assert res["updated"]["title"] == "Позвонить маме"
 
 
 async def test_task_without_any_time_gets_one(repo, user):
@@ -251,12 +251,22 @@ async def test_named_date_beats_nearest_weekday(repo, user):
     assert f"{target:%d.%m}" not in res["created"]["due"]
 
 
-async def test_appointment_as_task_suggests_event(repo, user):
+async def test_appointment_as_task_becomes_event(repo, user):
     ctx = ToolContext(repo, user)
     res = await run_tool(ctx, "create_task", {"title": "сделать маникюр", "due_at": "2030-11-26T19:00",
                                               "remind_before_minutes": 90})
-    assert "create_event" in res["error"]
-    # «записаться на маникюр» — это дело, не событие
+    ev = res["created_event"]
+    assert ev["when"] == "вт 26.11 19:00–20:30 Сделать маникюр" and ev["next_reminder"].endswith("17:30")
+    assert await repo.list_open_tasks(user.id) == []
+    # «записаться на маникюр» — дело
     res = await run_tool(ToolContext(repo, user), "create_task", {"title": "записаться на маникюр",
                                                                   "due_at": "2030-11-20T12:00"})
-    assert "created" in res
+    assert res["created"]["title"] == "Записаться на маникюр"
+
+
+def test_relayed_hint_detected():
+    from pim.agent.agent import relays_hint
+    err = ("это похоже на запись или встречу, которая занимает время (маникюр, врач, встреча…) — это событие "
+           "календаря. Повтори, если это именно дело «сделать что-то»")
+    assert relays_hint("Это похоже на запись или встречу, которая занимает время — это событие календаря.", [err])
+    assert not relays_hint("Записал в календарь: маникюр чт 26.11 19:00", [err])

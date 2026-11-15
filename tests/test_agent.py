@@ -33,7 +33,7 @@ async def test_agent_creates_task_via_tool(repo, user):
     reply = await agent.handle(user, "в четверг 10 января в 15 позвонить маме")
 
     assert reply.text.startswith("Записал")
-    assert [t.title for t in reply.touched] == ["позвонить маме"]
+    assert [t.title for t in reply.touched] == ["Позвонить маме"]
     tasks = await repo.list_open_tasks(user.id)
     assert len(tasks) == 1 and tasks[0].due_at.hour == 12  # 15:00 MSK = 12:00 UTC
     # результат инструмента ушёл модели во втором запросе

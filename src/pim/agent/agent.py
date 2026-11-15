@@ -63,6 +63,21 @@ _CODE_REQUEST = re.compile(r"код|функци|скрипт|программ|p
                            re.IGNORECASE)
 
 
+_RELAYED = ("Ты пересказал пользователю служебную подсказку инструмента — она была для тебя. Не упоминай её: "
+            "исправь вызов инструмента, если нужно, и ответь пользователю по сути, как будто подсказки не было.")
+
+
+def _shingles(text: str, n: int = 4) -> set[tuple[str, ...]]:
+    words = re.findall(r"\w+", text.casefold())
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def relays_hint(reply: str, errors: list[str]) -> bool:
+    """Ответ пересказывает подсказку из {"error": ...}: Gemini так делает («Это похоже на запись… Повтори…»)."""
+    said = _shingles(reply)
+    return any(len(said & _shingles(err)) >= 2 for err in errors)
+
+
 def wrongly_refused(reply: str, user_words: str) -> bool:
     if _CODE_REQUEST.search(user_words):
         return False  # «напиши код / сочинение» — отказ правильный
@@ -244,7 +259,8 @@ class Agent:
         messages = [await self._system_message(user, profile), *history, user_msg]
 
         reply = ""
-        retried = False
+        retried = relay_retried = False
+        errors: list[str] = []
         for _ in range(MAX_STEPS):
             answer = await self._llm.chat(messages, self._specs)
             messages.append(answer)
@@ -255,9 +271,16 @@ class Agent:
                     log.info("user %s: refusal on a task-like message, asking again", user.id)
                     messages.append(Message("user", _NOT_OFF_TOPIC))
                     continue
+                if not relay_retried and relays_hint(reply, errors):
+                    relay_retried = True
+                    log.info("user %s: reply relays a tool hint, asking again", user.id)
+                    messages.append(Message("user", _RELAYED))
+                    continue
                 break
             for call in answer.tool_calls:
                 result = await run_tool(ctx, call.name, call.arguments)
+                if isinstance(result.get("error"), str):
+                    errors.append(result["error"])
                 log.info("user %s: tool %s(%s) -> %s", user.id, call.name, call.arguments, result)
                 messages.append(
                     Message("tool", json.dumps(result, ensure_ascii=False), tool_call_id=call.id, name=call.name)
