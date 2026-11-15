@@ -1,0 +1,104 @@
+#cloud-config
+# Сервер для Pim: Ubuntu 26.04. Вход только по SSH-ключу, бот — systemd-сервис от пользователя pim,
+# порты 80/443 открыты под HTTPS для будущего Mini App / API (Caddy поставим вместе с ним). Секретов здесь нет: .env копируется на сервер отдельно (scp),
+# потому что user-data хранится у хостера.
+#
+# Перед использованием замените SSH_PUBLIC_KEY на свой публичный ключ (одна строка ssh-ed25519 …).
+
+hostname: pim
+timezone: Etc/UTC
+ssh_pwauth: false
+disable_root: true
+
+users:
+  - name: admin
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - SSH_PUBLIC_KEY
+  - name: pim
+    system: true
+    homedir: /opt/pim
+    shell: /usr/sbin/nologin
+
+package_update: true
+package_upgrade: true
+packages:
+  - git
+  - curl
+  - sqlite3
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+
+swap:
+  filename: /swapfile
+  size: 2147483648  # 2 ГБ
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-pim.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+
+  - path: /etc/systemd/system/pim.service
+    content: |
+      [Unit]
+      Description=Pim Telegram bot
+      After=network-online.target
+      Wants=network-online.target
+      # не стартует, пока не скопирован .env с токенами
+      ConditionPathExists=/opt/pim/app/.env
+
+      [Service]
+      User=pim
+      WorkingDirectory=/opt/pim/app
+      ExecStart=/opt/pim/app/.venv/bin/pim
+      Restart=always
+      RestartSec=10
+      Environment=HOME=/opt/pim
+      # whisper large-v3-turbo занимает ~1.5 ГБ; не даём боту съесть всю память сервера
+      MemoryMax=3G
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /usr/local/bin/pim-backup
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Ежедневная копия базы (консистентная, через sqlite .backup); хранится 14 дней.
+      # Это копия на том же диске — от удаления сервера не спасает, скачивайте к себе (см. deploy/README.md).
+      set -e
+      mkdir -p /var/backups/pim
+      [ -f /opt/pim/app/pim.db ] || exit 0
+      sqlite3 /opt/pim/app/pim.db ".backup '/var/backups/pim/pim-$(date +%F).db'"
+      find /var/backups/pim -name 'pim-*.db' -mtime +14 -delete
+
+  - path: /etc/cron.d/pim-backup
+    content: |
+      30 3 * * * root /usr/local/bin/pim-backup
+
+  - path: /etc/fail2ban/jail.d/sshd.local
+    content: |
+      [sshd]
+      enabled = true
+
+runcmd:
+  - systemctl restart ssh
+  - ufw allow OpenSSH
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - systemctl enable --now fail2ban
+  # uv ставит Python 3.11 рядом с системным (в 26.04 он новее, а колёса faster-whisper есть не для всех версий)
+  - curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
+  - mkdir -p /opt/pim && chown pim:pim /opt/pim
+  - sudo -u pim -H git clone --branch dev https://github.com/mariarivaille/PIM.git /opt/pim/app
+  - cd /opt/pim/app && sudo -u pim -H uv venv --python 3.11 .venv
+  - cd /opt/pim/app && sudo -u pim -H uv pip install --python .venv/bin/python -e .
+  - systemctl daemon-reload
+  - systemctl enable pim
