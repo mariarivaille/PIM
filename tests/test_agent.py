@@ -25,7 +25,8 @@ class ScriptedLLM:
 async def test_agent_creates_task_via_tool(repo, user):
     llm = ScriptedLLM([
         Message("assistant", tool_calls=[ToolCall("c1", "create_task",
-                                                  {"title": "позвонить маме", "due_at": "2030-01-10T15:00"})]),
+                                                  {"title": "позвонить маме", "due_at": "2030-01-10T15:00",
+                                                   "notes": "после её работы"})]),
         Message("assistant", "Записал: позвонить маме, чт 10.01 15:00"),
     ])
     agent = Agent(llm, repo, History(repo, 10))
@@ -142,3 +143,25 @@ async def test_code_reply_is_replaced(repo, user):
     assert reply.text == OFF_TOPIC_REPLY
     # и в историю попадает отказ, а не код
     assert (await History(repo, 10).get(user.id))[-1].content == OFF_TOPIC_REPLY
+
+
+async def test_task_without_notes_asks_once(repo, user):
+    llm = ScriptedLLM([
+        Message("assistant", tool_calls=[ToolCall("c1", "create_task", {"title": "банк", "due_at": "2030-01-10T15:00"})]),
+        Message("assistant", tool_calls=[ToolCall("c2", "create_task", {"title": "банк", "due_at": "2030-01-10T15:00"})]),
+        Message("assistant", "Записал"),
+    ])
+    reply = await Agent(llm, repo, History(repo, 10)).handle(user, "в четверг в 15 банк")
+    assert "notes пустые" in llm.calls[1][-1].content  # первый раз просим комментарий
+    assert [t.title for t in reply.touched] == ["банк"]  # второй раз — записываем как есть
+
+
+async def test_wrong_refusal_on_task_is_retried(repo, user):
+    from pim.agent.agent import wrongly_refused
+    llm = ScriptedLLM([
+        Message("assistant", "С этим я не помогаю — я веду твои дела, напоминания, списки и планы."),
+        Message("assistant", "Записал"),
+    ])
+    reply = await Agent(llm, repo, History(repo, 10)).handle(user, "Милому надо подать на гражданство")
+    assert reply.text == "Записал" and "не посторонняя" in llm.calls[1][-1].content
+    assert not wrongly_refused("С этим я не помогаю", "какая столица Франции?")

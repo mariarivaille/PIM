@@ -2,7 +2,7 @@ import html
 from datetime import date, timedelta
 
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from pim.core.models import ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
@@ -445,3 +445,35 @@ def reminder_kb(task: Task, usual_snooze: int | None = None) -> InlineKeyboardMa
         kb.button(text=label, callback_data=TaskAction(action="snooze", task_id=task.id, minutes=minutes))
     kb.adjust(1, 3)
     return kb.as_markup()
+
+
+MY_TASKS_BUTTON = "📋 Мои задачи"
+
+
+def main_menu() -> ReplyKeyboardMarkup:
+    """Постоянная кнопка внизу чата, под полем ввода."""
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=MY_TASKS_BUTTON)]], resize_keyboard=True,
+                               is_persistent=True, input_field_placeholder="Напиши или наговори дело")
+
+
+def tasks_text(tasks: list[Task], tz: str) -> str:
+    """«Мои задачи»: нумерованный список с комментариями (номера понимает агент: «второе сделано»)."""
+    if not tasks:
+        return "Открытых дел нет 🎉"
+    lines = ["📋 <b>Мои задачи</b>"]
+    for i, t in enumerate(tasks, 1):
+        due = f" — {format_local(t.due_at, tz)}" if t.due_at else ""
+        rep = " 🔁" if t.rrule else ""
+        lines.append(f"{i}. {html.escape(t.title)}{due}{rep}")
+        if t.notes:
+            lines.append(f"    <i>{html.escape(t.notes)}</i>")
+    lines.append("\nЧтобы закрыть или перенести — напиши, например: «второе сделано», «третье на пятницу».")
+    return "\n".join(lines)
+
+
+def tasks_context(tasks: list[Task], tz: str) -> str:
+    """Тот же список простым текстом и с id — в историю диалога для агента."""
+    lines = ["[Мои задачи] Показал пользователю список:"]
+    lines += [f"{i}. {t.title}" + (f" — {format_local(t.due_at, tz)}" if t.due_at else "") + f" (id {t.id})"
+              for i, t in enumerate(tasks, 1)]
+    return "\n".join(lines)

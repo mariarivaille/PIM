@@ -50,6 +50,8 @@ class ToolContext:
     auto_time: set[int] = field(default_factory=set)
     # уже просили модель выбрать время за этот ход — второй раз не просим, ставим запасное
     asked_for_time: bool = False
+    asked_for_notes: bool = False
+    require_notes: bool = False  # включает агент; в тестах инструментов по умолчанию выключено
     # уже переспросили модель «чьё это дело», когда в сообщении упомянут близкий
     asked_whose_task: bool = False
     # уже просили переписать поручение от лица исполнителя (без «меня»)
@@ -294,6 +296,14 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         due, auto = nearest_reasonable_time(utcnow(), ctx.user.timezone), True
     else:
         due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
+    if ctx.require_notes and not (notes or "").strip() and not ctx.asked_for_notes:
+        # у каждого дела комментарий: контекст и временные ограничения — модель часто его пропускает
+        ctx.asked_for_notes = True
+        raise ToolError(
+            "notes пустые. Добавь короткий комментарий (1–2 фразы): контекст и временные ограничения дела — срок, "
+            "часы работы, «только после работы», «до отъезда». Проверь, что выбранное время в них укладывается, "
+            "и вызови create_task ещё раз с теми же аргументами и notes"
+        )
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
     event_at = None
@@ -598,7 +608,7 @@ async def share_list(ctx: ToolContext, list: str, person: str) -> dict:
 
 async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | None = None, day: str | None = None,
                       time: str | None = None, in_minutes: int | None = None, notes: str | None = None,
-                      date_from_forwarded: bool = True) -> dict:
+                      date_from_forwarded: bool = True, time_guessed: bool = False) -> dict:
     ctx.date_from_forwarded = date_from_forwarded
     conn, peer = await _find_person(ctx, person)
     if not ctx.asked_assign_wording and FIRST_PERSON.search(title):
@@ -779,7 +789,8 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "in_minutes": _IN_MINUTES,
                     "due_at": _DUE,
                     "rrule": _RRULE,
-                    "notes": {"type": "string", "description": "Доп. детали, если есть"},
+                    "notes": {"type": "string", "description": "Комментарий: контекст и временные ограничения "
+                              "(срок, часы работы, «после работы»). Обязателен"},
                     "date_from_forwarded": _FROM_FORWARDED,
                     "remind_before_minutes": {
                         "type": "integer",
@@ -998,6 +1009,7 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
                     "due_at": _DUE,
                     "notes": {"type": "string", "description": "Детали, если есть"},
                     "date_from_forwarded": _FROM_FORWARDED,
+                    "time_guessed": _TIME_GUESSED,
                 },
                 "required": ["person", "title"],
             },

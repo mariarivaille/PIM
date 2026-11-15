@@ -167,3 +167,13 @@ async def test_rollover_moves_past_days_to_today(repo, user):
     }  # «сегодня рано» не трогаем — его разберёт вечер
     assert await roll_over(repo, morning) == []
     assert await repo.task_events(user.id, morning - timedelta(days=30)) == []
+
+
+async def test_tasks_list_is_numbered_with_notes(repo, user):
+    from pim.telegram.keyboards import tasks_context, tasks_text
+    await repo.create_task(user.id, "подушка", due_at=parse_local("2026-11-15T19:00", TZ))
+    await repo.create_task(user.id, "посылки", due_at=parse_local("2026-11-15T20:30", TZ), notes="ПВЗ до 21:00")
+    tasks = await repo.list_open_tasks(user.id)
+    text = tasks_text(tasks, TZ)
+    assert "1. подушка" in text and "2. посылки" in text and "<i>ПВЗ до 21:00</i>" in text
+    assert f"2. посылки — вс 15.11 20:30 (id {tasks[1].id})" in tasks_context(tasks, TZ)

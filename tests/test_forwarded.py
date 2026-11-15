@@ -36,7 +36,8 @@ async def test_handle_forwarded_wraps_text_and_uses_sent_time(repo, user):
     sent = utcnow() - timedelta(days=1)
     llm = ScriptedLLM([
         Message("assistant", tool_calls=[ToolCall("c1", "create_task",
-                                                  {"title": "Созвон с Андреем", "day": "tomorrow", "time": "15:00"})]),
+                                                  {"title": "Созвон с Андреем", "day": "tomorrow", "time": "15:00",
+                                                   "notes": "предложил Андрей"})]),
         Message("assistant", "Записал созвон с Андреем на сегодня 15:00."),
     ])
     agent = Agent(llm, repo, History(repo, 10))

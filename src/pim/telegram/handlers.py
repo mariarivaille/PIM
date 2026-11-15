@@ -24,6 +24,7 @@ from pim.reminders.review import evening_review, postpone_all_to_tomorrow, postp
 from pim.stt.base import Transcriber
 from pim.telegram.bot_helpers import INVITE_PREFIX, invite_code
 from pim.telegram.burst import Burster, Incoming
+from pim.telegram.keyboards import MY_TASKS_BUTTON, main_menu, tasks_context, tasks_text
 from pim.telegram.keyboards import (
     AssignAction,
     DateAction,
@@ -133,7 +134,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             "/reset — забыть контекст диалога\n\n"
             f"Часовой пояс: {user.timezone}\nУтренняя сводка: {digest} "
             "(«присылай сводку в 8:30» / «не присылай сводку»)\n"
-            f"Вечерний разбор: {review_at} («разбор в 22:00» / «не нужен вечерний разбор»)"
+            f"Вечерний разбор: {review_at} («разбор в 22:00» / «не нужен вечерний разбор»)",
+            reply_markup=main_menu(),
         )
 
     @router.message(Command("digest"))
@@ -301,18 +303,14 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         await cb.answer()
 
     @router.message(Command("tasks"))
+    @router.message(F.text == MY_TASKS_BUTTON)
     async def tasks(message: Message):
         user = await ensure_user(message)
         items = await repo.list_open_tasks(user.id)
-        if not items:
-            await message.answer("Открытых дел нет 🎉")
-            return
-        lines = []
-        for t in items:
-            due = f" — {format_local(t.due_at, user.timezone)}" if t.due_at else ""
-            rep = " 🔁" if t.rrule else ""
-            lines.append(f"• {html.escape(t.title)}{due}{rep}")
-        await message.answer("\n".join(lines))
+        await message.answer(tasks_text(items, user.timezone), reply_markup=main_menu())
+        if items:
+            await repo.add_messages(user.id, ("user", MY_TASKS_BUTTON),
+                                    ("assistant", tasks_context(items, user.timezone)), at=utcnow())
 
     @router.message(Command("reset"))
     async def reset(message: Message):
@@ -490,7 +488,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         await cb.answer()
 
     async def send_reply(message: Message, user, reply):
-        await message.answer(html.escape(reply.text))
+        await message.answer(html.escape(reply.text), reply_markup=main_menu())
         # дедуп: одна задача могла быть затронута несколько раз за ход
         seen = {}
         for t in reply.touched:

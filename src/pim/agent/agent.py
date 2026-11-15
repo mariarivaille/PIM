@@ -43,6 +43,22 @@ _CODE_LINE = re.compile(
 )
 
 
+# Отказ «С этим я не помогаю», хотя пользователь говорит о деле: Gemini путает поручения и отчёты с посторонними
+# просьбами («Милому надо подать на гражданство», «сделала банк»). Тогда переспрашиваем модель один раз.
+_REFUSAL = re.compile(r"с этим я не помогаю", re.IGNORECASE)
+_TASKISH = re.compile(
+    r"(?<!\w)(?:надо|нужно|необходимо|должн\w*|напомн\w*|запиши|записать|поставь|перенеси|отмени|удали|"
+    r"сделал\w*|готово|купил\w*|забрал\w*|позвонил\w*|поручи|дело|дела|задач\w*|список|списк\w*|запомни)(?!\w)",
+    re.IGNORECASE,
+)
+_NOT_OFF_TOPIC = ("Это не посторонняя просьба: пользователь говорит о своём деле или о деле близкого "
+                  "(записать, поручить, закрыть, перенести, напомнить). Выполни это инструментами.")
+
+
+def wrongly_refused(reply: str, user_words: str) -> bool:
+    return bool(_REFUSAL.search(reply)) and bool(_TASKISH.search(user_words))
+
+
 def looks_like_code(text: str) -> bool:
     return bool(_CODE_FENCE.search(text)) or len(_CODE_LINE.findall(text)) >= 2
 # Пометка фото в тексте сообщения: модель понимает, что к нему приложена картинка
@@ -94,6 +110,7 @@ class Agent:
         self._max_memories = max_memories
         self._repo = repo
         self.history = history
+        self.require_notes = True  # у каждого дела комментарий (см. create_task)
         self._specs = [spec for spec, _ in TOOLS.values()]
         # Сообщения одного пользователя обрабатываются строго по очереди, разные пользователи — параллельно
         self._locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -160,7 +177,9 @@ class Agent:
     async def _system_message(self, user: User, profile: TimeProfile) -> Message:
         tasks = await self._repo.list_open_tasks(user.id)
         memories = await self._repo.list_memories(user.id)
-        tasks_block = "\n".join(json.dumps(task_view(t, user.timezone), ensure_ascii=False) for t in tasks)
+        # n — номер дела в списке, который видит пользователь («Мои задачи», /tasks): «второе сделано»
+        tasks_block = "\n".join(json.dumps({"n": i, **task_view(t, user.timezone)}, ensure_ascii=False)
+                                for i, t in enumerate(tasks, 1))
         memories_block = "\n".join(json.dumps(memory_view(m, user.timezone), ensure_ascii=False) for m in memories)
         shared = await self._repo.shared_list_ids(user.id)
         lists_block = "\n".join(f"«{lst.name}» — неотмеченных {open_}, всего {total}"
@@ -190,17 +209,23 @@ class Agent:
         profile = await load_profile(self._repo, user)
         ctx = ToolContext(repo=self._repo, user=user, user_text=own_words(text), prev_assistant=prev_assistant,
                           max_memories=self._max_memories, reference_time=reference_time, profile=profile,
-                          planner=self._planner, adjust_task=adjust_task)
+                          planner=self._planner, adjust_task=adjust_task, require_notes=self.require_notes)
         # в историю уходит только текст (с пометкой «[Фото…]»), сама картинка — только в этот ход
         user_msg = Message("user", text, images=images)
         messages = [await self._system_message(user, profile), *history, user_msg]
 
         reply = ""
+        retried = False
         for _ in range(MAX_STEPS):
             answer = await self._llm.chat(messages, self._specs)
             messages.append(answer)
             if not answer.tool_calls:
                 reply = answer.content
+                if not retried and wrongly_refused(reply, ctx.user_text):
+                    retried = True
+                    log.info("user %s: refusal on a task-like message, asking again", user.id)
+                    messages.append(Message("user", _NOT_OFF_TOPIC))
+                    continue
                 break
             for call in answer.tool_calls:
                 result = await run_tool(ctx, call.name, call.arguments)
