@@ -12,6 +12,7 @@ from pim.agent.tools import with_reply
 from pim.telegram.format import md_to_html
 from pim.telegram.cards import delete_message, remember_card, remove_cards
 from pim.config import Settings
+from pim.core.calendar import expand
 from pim.core.models import utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import format_local, to_local
@@ -24,7 +25,18 @@ from pim.reminders.review import evening_review, postpone_all_to_tomorrow, postp
 from pim.stt.base import Transcriber
 from pim.telegram.bot_helpers import INVITE_PREFIX, invite_code
 from pim.telegram.burst import Burster, Incoming
-from pim.telegram.keyboards import MY_TASKS_BUTTON, main_menu, tasks_context, tasks_text
+from pim.telegram.keyboards import (
+    CALENDAR_BUTTON,
+    CALENDAR_DAYS,
+    MY_TASKS_BUTTON,
+    EventAction,
+    calendar_text,
+    event_card,
+    event_kb,
+    main_menu,
+    tasks_context,
+    tasks_text,
+)
 from pim.telegram.keyboards import (
     AssignAction,
     DateAction,
@@ -131,7 +143,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
             "Запоминаю важное о тебе: сам из разговоров или по просьбе — «запомни, что мама — Ольга, ДР 12 марта». "
             "Посмотреть — /memory, удалить — «удали факт 3».\n\n"
-            "/tasks — список дел\n/lists — списки (покупки, в поездку…)\n"
+            "/tasks — список дел\n/calendar — календарь на неделю\n/lists — списки (покупки, в поездку…)\n"
             "/digest — сводка на сегодня\n/review — разбор дня: несделанное на завтра\n"
             "/memory — что я о тебе знаю\n/habits — твои привычки по времени\n"
             "/people — близкие: поручения и общие списки\n/invite — пригласить близкого\n"
@@ -268,6 +280,26 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         text, kb = list_card(lst, await repo.list_items(lst.id), lst.id in await repo.shared_list_ids(user.id))
         await cb.message.edit_text(text, reply_markup=kb)
         await cb.answer()
+
+    @router.message(Command("calendar"))
+    @router.message(F.text == CALENDAR_BUTTON)
+    async def calendar(message: Message):
+        user = await ensure_user(message)
+        start = to_local(utcnow(), user.timezone).replace(hour=0, minute=0, second=0, microsecond=0)
+        occ = expand(await repo.list_events(user.id), start, start + timedelta(days=CALENDAR_DAYS), user.timezone)
+        tasks = await repo.list_open_tasks(user.id)
+        await message.answer(calendar_text(occ, tasks, start.date(), user.timezone), reply_markup=main_menu())
+
+    @router.callback_query(EventAction.filter(F.action == "cancel"))
+    async def on_event_cancel(cb: CallbackQuery, callback_data: EventAction):
+        user = await ensure_user(cb)
+        event = await repo.get_event(user.id, callback_data.event_id)
+        if event is None:
+            await cb.answer("Этого события уже нет")
+        else:
+            await repo.update_event(user.id, event.id, cancelled=True, next_reminder_at=None)
+            await cb.answer("Удалено")
+        await cb.message.edit_text(f"{cb.message.html_text}\n\n🗑 Удалено из календаря", reply_markup=None)
 
     @router.message(Command("tasks"))
     @router.message(F.text == MY_TASKS_BUTTON)
@@ -471,6 +503,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
                 card = await message.answer(task_card(t, user.timezone, auto_time=t.id in reply.auto_time),
                                             reply_markup=created_kb(t))
                 await remember_card(repo, t.id, card)
+        for ev in {e.id: e for e in reply.events_touched}.values():
+            if not ev.cancelled:
+                await message.answer(event_card(ev, user.timezone), reply_markup=event_kb(ev))
         for list_id in reply.lists_touched:
             await show_list_card(message, user, list_id)
 

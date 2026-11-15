@@ -153,6 +153,32 @@ class TaskCard(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
+class Event(Base):
+    """Событие календаря — отрезок времени (встреча 14:00–15:30, спортзал по пн 19–21, отпуск 1–10 дек).
+
+    В отличие от дела его не «делают»: в это время пользователь занят. Повтор — RRULE от starts_at
+    (локальное время, как у дел). Весь день (all_day) занятостью не считается: отпуск не мешает делам.
+    """
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(500))
+    starts_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    ends_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    all_day: Mapped[bool] = mapped_column(default=False, server_default="0")
+    rrule: Mapped[str | None] = mapped_column(String(255))
+    location: Mapped[str | None] = mapped_column(String(300))
+    notes: Mapped[str | None] = mapped_column(Text)
+    # за сколько минут до начала напомнить; None — без напоминания
+    remind_before: Mapped[int | None] = mapped_column()
+    # ближайшее напоминание (для повторяющихся — о следующем разе); считает calendar.next_reminder
+    next_reminder_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    cancelled: Mapped[bool] = mapped_column(default=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
 class ItemList(Base):
     """Список (покупки, в поездку, фильмы…): пункты без времени и напоминаний.
 

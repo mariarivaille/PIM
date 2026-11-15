@@ -1,10 +1,12 @@
 import html
+from datetime import timedelta
 
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from pim.core.models import ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
+from pim.core.calendar import Occurrence
+from pim.core.models import Event, ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
 from pim.agent.tools import lead_text
 from pim.learning.timing import MIN_HOUR_SAMPLES, MIN_SNOOZE_SAMPLES, WINDOW_DAYS, TimeProfile
@@ -302,10 +304,13 @@ def format_digest(digest: Digest, tz: str) -> str:
     if digest.overdue:
         parts.append("\n<b>Просрочено:</b>")
         parts += [_digest_line(t, tz, with_date=True) for t in digest.overdue]
+    if digest.events:
+        parts.append("\n<b>📅 В календаре:</b>")
+        parts += [f"• {_event_time(o, tz)} {html.escape(o.event.title)}" for o in digest.events]
     if digest.today:
         parts.append("\n<b>Сегодня:</b>")
         parts += [_digest_line(t, tz, with_date=False) for t in digest.today]
-    else:
+    elif not digest.events:
         parts.append("\nНа сегодня ничего не запланировано.")
     if digest.dates:
         parts.append("\n<b>🎂 Скоро:</b>")
@@ -411,12 +416,99 @@ def reminder_kb(task: Task, usual_snooze: int | None = None) -> InlineKeyboardMa
 
 
 MY_TASKS_BUTTON = "📋 Мои задачи"
+CALENDAR_BUTTON = "📅 Календарь"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
-    """Постоянная кнопка внизу чата, под полем ввода."""
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=MY_TASKS_BUTTON)]], resize_keyboard=True,
-                               is_persistent=True, input_field_placeholder="Напиши или наговори дело")
+    """Постоянные кнопки внизу чата, под полем ввода."""
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=MY_TASKS_BUTTON), KeyboardButton(text=CALENDAR_BUTTON)]],
+                               resize_keyboard=True, is_persistent=True,
+                               input_field_placeholder="Напиши или наговори дело")
+
+
+class EventAction(CallbackData, prefix="e"):
+    action: str  # cancel
+    event_id: int
+
+
+def _event_time(occ: Occurrence, tz: str) -> str:
+    start, end = to_local(occ.start, tz), to_local(occ.end, tz)
+    if occ.event.all_day:
+        return "весь день"
+    tail = f"{end:%H:%M}" if end.date() == start.date() else f"{WEEKDAYS_RU[end.weekday()]} {end:%d.%m %H:%M}"
+    return f"{start:%H:%M}–{tail}"
+
+
+def event_card(event: Event, tz: str) -> str:
+    occ = Occurrence(event, event.starts_at, event.ends_at)
+    start = to_local(event.starts_at, tz)
+    lines = [f"📅 <b>{html.escape(event.title)}</b>"]
+    if event.all_day:
+        last = to_local(event.ends_at, tz) - timedelta(days=1)
+        span = f"{WEEKDAYS_RU[start.weekday()]} {start:%d.%m}" + (f" – {WEEKDAYS_RU[last.weekday()]} {last:%d.%m}"
+                                                                     if last.date() > start.date() else "")
+        lines.append(f"🗓 {span}, весь день")
+    else:
+        lines.append(f"🗓 {WEEKDAYS_RU[start.weekday()]} {start:%d.%m}, {_event_time(occ, tz)}")
+    if event.rrule:
+        lines.append(f"🔁 {html.escape(event.rrule)}")
+    if event.location:
+        lines.append(f"📍 {html.escape(event.location)}")
+    if event.notes:
+        lines.append(html.escape(event.notes))
+    if event.next_reminder_at and not event.all_day:
+        lines.append(f"🔔 напомню {format_local(event.next_reminder_at, tz)}"
+                     + (f" — за {lead_text(timedelta(minutes=event.remind_before))}" if event.remind_before else ""))
+    return "\n".join(lines)
+
+
+def event_kb(event: Event) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🗑 Удалить из календаря", callback_data=EventAction(action="cancel", event_id=event.id))
+    return kb.as_markup()
+
+
+def event_reminder_text(occ: Occurrence, tz: str, now) -> str:
+    until = humanize_until(occ.start, now, tz)
+    head = f"📅 {until.capitalize()} — {'пора собираться' if (occ.event.remind_before or 0) >= 30 else 'скоро начало'}" \
+        if until else "📅 Начинается сейчас"
+    lines = [head, "", f"<b>{html.escape(occ.event.title)}</b>", f"🗓 {_event_time(occ, tz)}"]
+    if occ.event.location:
+        lines.append(f"📍 {html.escape(occ.event.location)}")
+    if occ.event.notes:
+        lines.append(html.escape(occ.event.notes))
+    return "\n".join(lines)
+
+
+CALENDAR_DAYS = 7
+
+
+def calendar_text(occ: list[Occurrence], tasks: list[Task], start_day, tz: str) -> str:
+    """«📅 Календарь»: неделя по дням — события отрезками, дела со временем — точками."""
+    lines = ["📅 <b>Календарь на неделю</b>"]
+    any_day = False
+    for i in range(CALENDAR_DAYS):
+        day = start_day + timedelta(days=i)
+        items = []
+        for o in occ:
+            if to_local(o.start, tz).date() <= day < to_local(o.end - timedelta(seconds=1), tz).date() + timedelta(days=1):
+                key = "00:00" if o.event.all_day else f"{to_local(o.start, tz):%H:%M}"
+                if o.event.all_day or to_local(o.start, tz).date() == day:
+                    items.append((key, f"📅 {_event_time(o, tz)} {html.escape(o.event.title)}"))
+        for t in tasks:
+            if t.due_at and to_local(t.due_at, tz).date() == day:
+                items.append((f"{to_local(t.due_at, tz):%H:%M}", f"⏰ {to_local(t.due_at, tz):%H:%M} {html.escape(t.title)}"))
+        if not items:
+            continue
+        any_day = True
+        label = "Сегодня" if i == 0 else "Завтра" if i == 1 else ""
+        lines.append(f"\n<b>{WEEKDAYS_RU[day.weekday()]} {day:%d.%m}</b>" + (f" · {label}" if label else ""))
+        lines += [text for _, text in sorted(items, key=lambda x: x[0])]
+    if not any_day:
+        lines.append("\nНа неделю ничего нет. Скажи, например: «маникюр в субботу в 12» или "
+                     "«по понедельникам спортзал с 19 до 21».")
+    return _fit(lines)
+
 
 
 def tasks_text(tasks: list[Task], tz: str) -> str:

@@ -9,7 +9,8 @@ from typing import Callable
 
 from pim.agent.commands import parse_delete_facts
 from pim.agent.prompts import build_system_prompt
-from pim.agent.tools import COMMENT_MARK, FORWARD_MARK, TOOLS, own_words, ToolContext, memory_view, run_tool, task_view
+from pim.agent.tools import COMMENT_MARK, FORWARD_MARK, TOOLS, event_when, own_words, ToolContext, memory_view, run_tool, task_view
+from pim.core import calendar as cal
 from pim.core.models import Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import WEEKDAYS_RU, format_local, to_local
@@ -91,6 +92,7 @@ class AgentReply:
     auto_time: set[int] = field(default_factory=set)
     lists_touched: list[int] = field(default_factory=list)
     drafts: list[str] = field(default_factory=list)
+    events_touched: list = field(default_factory=list)
 
 
 class History:
@@ -207,8 +209,17 @@ class Agent:
             to_local(utcnow(), user.timezone), user.timezone, user.digest_time, tasks_block, memories_block,
             auto_memory=user.auto_memory, review_time=user.review_time, lists_block=lists_block,
             habits_block="\n".join(profile.prompt_lines()), people_block=people_block,
-            location=location_hint(memories),
+            location=location_hint(memories), calendar_block=await self._calendar_block(user),
         ))
+
+    async def _calendar_block(self, user: User) -> str:
+        """Календарь на 7 дней вперёд — чтобы модель знала занятость и отвечала «что у меня в четверг»."""
+        day_start = to_local(utcnow(), user.timezone).replace(hour=0, minute=0, second=0, microsecond=0)
+        occ = cal.expand(await self._repo.list_events(user.id), day_start, day_start + timedelta(days=7),
+                         user.timezone)
+        return "\n".join(f"id {o.event.id}: {event_when(o, user.timezone)}"
+                         + (f" ({o.event.location})" if o.event.location else "")
+                         + (" [повтор]" if o.event.rrule else "") for o in occ)
 
     async def _handle(self, user: User, text: str, reference_time: datetime | None = None,
                       images: list[Image] | None = None, adjust_task: Task | None = None) -> AgentReply:
@@ -269,4 +280,4 @@ class Agent:
         shown = "".join(f"\n\n{DRAFT_MARK}\n{d}" for d in ctx.drafts)
         await self.history.add(user.id, Message("user", text), Message("assistant", reply + shown))
         return AgentReply(text=reply, touched=ctx.touched, auto_time=ctx.auto_time, lists_touched=ctx.lists_touched,
-                          drafts=ctx.drafts)
+                          drafts=ctx.drafts, events_touched=ctx.events_touched)

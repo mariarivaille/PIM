@@ -13,10 +13,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
 
-from pim.core.models import ItemList, Memory, MemoryKind, MemorySource, Task, TaskEventKind, User, utcnow
+from pim.core import calendar as cal
+from pim.core.models import Event, ItemList, Memory, MemoryKind, MemorySource, Task, TaskEventKind, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import (
     DAY_KEYWORDS,
+    WEEKDAYS_RU,
     DEFAULT_TIME,
     format_local,
     humanize_until,
@@ -67,6 +69,8 @@ class ToolContext:
     drafts: list[str] = field(default_factory=list)
     asked_draft_details: bool = False
     asked_lead_time: bool = False
+    # события календаря, созданные или изменённые за ход — телеграм-слой покажет карточки
+    events_touched: list = field(default_factory=list)
     # привычки по времени (learning/timing.py) — для времени по умолчанию
     profile: TimeProfile | None = None
     # поиск в интернете (search/web.py); None — выключен. searches_left — сколько поисков ещё можно за ход
@@ -352,6 +356,18 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
             "больше) и вызови create_task ещё раз с remind_before_minutes. Если ехать никуда не нужно — "
             "remind_before_minutes=0"
         )
+    events = await ctx.repo.list_events(ctx.user.id)
+    conflict_view = None
+    shifted_note = None
+    if due and auto:
+        # время выбирал не пользователь — ставим мимо встреч из календаря
+        free = cal.next_free(events, due, ctx.user.timezone)
+        if free != due:
+            shifted_note = (f"{format_local(due, ctx.user.timezone)} занято в календаре — код поставил дело на "
+                            f"{format_local(free, ctx.user.timezone)}. Называй в ответе именно это время")
+        due = free
+    elif due and (busy := cal.conflicts(events, due, ctx.user.timezone)):
+        conflict_view = [event_when(o, ctx.user.timezone) for o in busy]
     remind_at = None
     if remind_before_minutes and due:
         # «за час», «на дорогу 45 мин»: вычитает код; due_at остаётся временем самого дела
@@ -373,7 +389,13 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
     if due and not auto and not in_minutes and due > utcnow():
         # пользователь сам назвал время — сигнал, в какие часы ему удобно (см. learning/timing.py)
         await ctx.repo.log_event(ctx.user.id, TaskEventKind.PLANNED, due, task_id=task.id)
-    return {"created": _due_view(ctx, task, auto)}
+    view = _due_view(ctx, task, auto)
+    if conflict_view:
+        view["conflicts_with"] = conflict_view
+        view["conflict_note"] = "в это время у пользователя событие в календаре — предупреди одной фразой"
+    if shifted_note:
+        view["moved_off_busy_time"] = shifted_note
+    return {"created": view}
 
 
 async def list_tasks(ctx: ToolContext) -> dict:
@@ -419,9 +441,26 @@ async def update_task(ctx: ToolContext, task_id: int, title: str | None = None, 
         cleaned = strip_time_words(fields.get("title") or task.title)
         if cleaned != task.title:
             fields["title"] = cleaned
+    conflict_view = shifted_note = None
+    if fields.get("due_at"):
+        events = await ctx.repo.list_events(ctx.user.id)
+        if auto:
+            free = cal.next_free(events, fields["due_at"], ctx.user.timezone)
+            if free != fields["due_at"]:
+                shifted_note = (f"{format_local(fields['due_at'], ctx.user.timezone)} занято в календаре — код "
+                                f"поставил на {format_local(free, ctx.user.timezone)}. Называй в ответе именно это время")
+                fields["due_at"] = free
+        elif busy := cal.conflicts(events, fields["due_at"], ctx.user.timezone):
+            conflict_view = [event_when(o, ctx.user.timezone) for o in busy]
     task = await ctx.repo.update_task(task.user_id, int(task_id), **fields)
     ctx.touched.append(task)
-    return {"updated": _due_view(ctx, task, auto)}
+    view = _due_view(ctx, task, auto)
+    if shifted_note:
+        view["moved_off_busy_time"] = shifted_note
+    if conflict_view:
+        view["conflicts_with"] = conflict_view
+        view["conflict_note"] = "в это время у пользователя событие в календаре — предупреди одной фразой"
+    return {"updated": view}
 
 
 async def complete_task(ctx: ToolContext, task_id: int) -> dict:
@@ -664,6 +703,189 @@ async def assign_task(ctx: ToolContext, person: str, title: str, due_at: str | N
                     + "; когда сделает — пользователю придёт уведомление"}
 
 
+# --- календарь ---
+
+DEFAULT_EVENT_MINUTES = 60
+
+
+def event_when(occ: "cal.Occurrence", tz: str) -> str:
+    """«пн 16.11 19:00–21:00 Спортзал», «весь день 01.12–10.12 Отпуск»."""
+    start, end = to_local(occ.start, tz), to_local(occ.end, tz)
+    if occ.event.all_day:
+        last = end - timedelta(days=1)
+        days = f"{WEEKDAYS_RU[start.weekday()]} {start:%d.%m}" + (f"–{last:%d.%m}" if last.date() > start.date() else "")
+        return f"весь день {days} {occ.event.title}"
+    tail = f"{end:%H:%M}" if end.date() == start.date() else f"{WEEKDAYS_RU[end.weekday()]} {end:%d.%m %H:%M}"
+    return f"{WEEKDAYS_RU[start.weekday()]} {start:%d.%m %H:%M}–{tail} {occ.event.title}"
+
+
+def event_view(event: Event, tz: str) -> dict[str, Any]:
+    view = {"id": event.id, "when": event_when(cal.Occurrence(event, event.starts_at, event.ends_at), tz),
+            "title": event.title}
+    for key in ("rrule", "location", "notes"):
+        if value := getattr(event, key):
+            view[key] = value
+    if event.remind_before:
+        view["remind_before"] = lead_text(timedelta(minutes=event.remind_before))
+    if event.next_reminder_at:
+        view["next_reminder"] = format_local(event.next_reminder_at, tz)
+    return view
+
+
+def _event_date(ctx: ToolContext, day: str | None, date_: str | None, start_at: dt_time | None):
+    """День события: явная дата, день словом или (без них) сегодня — а если время уже прошло, завтра."""
+    tz = ctx.user.timezone
+    if date_:
+        try:
+            return date.fromisoformat(date_[:10])
+        except ValueError as e:
+            raise ToolError(f"date нужна в формате YYYY-MM-DD, получено {date_!r}") from e
+    if day and day not in DAY_KEYWORDS:
+        raise ToolError(f"day должен быть одним из {DAY_KEYWORDS}, получено {day!r}")
+    return to_local(resolve_day_time(utcnow(), tz, day, start_at or dt_time(0, 1)), tz).date()
+
+
+def _hhmm(value: str | None, name: str) -> dt_time | None:
+    if not value:
+        return None
+    try:
+        return parse_hhmm(value)
+    except ValueError as e:
+        raise ToolError(f"{name} нужно в формате HH:MM, получено {value!r}") from e
+
+
+def _event_span(ctx: ToolContext, day, date_, start, end, minutes, all_day, days,
+                current: Event | None = None) -> tuple[datetime, datetime] | None:
+    """Начало и конец события в UTC. Для правки (current) — что не названо, берётся из текущего события."""
+    tz = ZoneInfo(ctx.user.timezone)
+    start_t, end_t = _hhmm(start, "start"), _hhmm(end, "end")
+    if current is not None and not any((day, date_, start, end, minutes, days)):
+        return None
+    if current is not None:
+        cur_start = current.starts_at.astimezone(tz)
+        length = current.ends_at - current.starts_at
+        on = _event_date(ctx, day, date_, start_t) if (day or date_) else cur_start.date()
+        start_t = start_t or cur_start.time().replace(tzinfo=None)
+        all_day = current.all_day if all_day is None else all_day
+    else:
+        on = _event_date(ctx, day, date_, start_t)
+        length = timedelta(minutes=DEFAULT_EVENT_MINUTES)
+    if all_day:
+        begin = datetime.combine(on, dt_time(0), tzinfo=tz)
+        n = int(days) if days else (max(1, length.days) if current is not None else 1)
+        return begin.astimezone(dt_timezone.utc), (begin + timedelta(days=n)).astimezone(dt_timezone.utc)
+    if start_t is None:
+        raise ToolError("нужно время начала start (HH:MM); если событие на весь день — all_day=true")
+    begin = datetime.combine(on, start_t, tzinfo=tz)
+    if end_t:
+        finish = datetime.combine(on, end_t, tzinfo=tz)
+        if finish <= begin:
+            finish += timedelta(days=1)  # «с 22 до 2»
+    elif minutes:
+        finish = begin + timedelta(minutes=int(minutes))
+    else:
+        finish = begin + length
+    return begin.astimezone(dt_timezone.utc), finish.astimezone(dt_timezone.utc)
+
+
+def _tasks_inside(tasks: list[Task], start: datetime, end: datetime, tz: str) -> list[str]:
+    return [f"{format_local(t.due_at, tz)} {t.title}" for t in tasks if t.due_at and start <= t.due_at < end]
+
+
+async def create_event(ctx: ToolContext, title: str, day: str | None = None, date: str | None = None,
+                       start: str | None = None, end: str | None = None, minutes: int | None = None,
+                       all_day: bool = False, days: int | None = None, rrule: str | None = None,
+                       location: str | None = None, notes: str | None = None,
+                       remind_before_minutes: int | None = None) -> dict:
+    tz = ctx.user.timezone
+    starts_at, ends_at = _event_span(ctx, day, date, start, end, minutes, all_day, days)
+    if (remind_before_minutes is None and not all_day and not ctx.asked_lead_time
+            and GOING_OUT.search(f"{title} {location or ''}")):
+        ctx.asked_lead_time = True
+        raise ToolError(
+            "похоже, на это событие нужно куда-то идти или ехать. Реши, за сколько напомнить, с учётом дороги и "
+            "сборов (обычно 30–90 мин; поезд, самолёт — больше) и вызови create_event ещё раз с "
+            "remind_before_minutes. Если ехать никуда не нужно — remind_before_minutes=0"
+        )
+    if remind_before_minutes is None and not all_day:
+        remind_before_minutes = 0  # хотя бы в момент начала
+    events = await ctx.repo.list_events(ctx.user.id)
+    title = strip_time_words(title)
+    for e in events:
+        if cal_key(e.title) == cal_key(title) and e.starts_at == starts_at:
+            return {"already_exists": event_view(e, tz), "note": "такое событие уже есть — второе не создавал"}
+    overlaps = [event_when(o, tz) for o in cal.expand(events, starts_at, ends_at, tz) if o.busy and not all_day]
+    event = await ctx.repo.create_event(
+        ctx.user.id, title=title, starts_at=starts_at, ends_at=ends_at, all_day=bool(all_day),
+        rrule=_check_rrule(rrule), location=location or None, notes=notes or None,
+        remind_before=remind_before_minutes,
+    )
+    nxt = cal.next_reminder(event, utcnow(), tz, utcnow())
+    event = await ctx.repo.update_event(ctx.user.id, event.id, next_reminder_at=nxt)
+    ctx.events_touched.append(event)
+    result: dict[str, Any] = {"created_event": event_view(event, tz)}
+    if overlaps:
+        result["overlaps"] = overlaps
+    if inside := _tasks_inside(await ctx.repo.list_open_tasks(ctx.user.id), starts_at, ends_at, tz):
+        result["tasks_at_this_time"] = inside
+    if overlaps or inside:
+        result["note"] = "на это время уже есть другое — скажи пользователю одной фразой"
+    return result
+
+
+def cal_key(title: str) -> str:
+    return _title_key(title)
+
+
+async def list_events(ctx: ToolContext, day: str | None = None, date: str | None = None, days: int = 7) -> dict:
+    tz = ZoneInfo(ctx.user.timezone)
+    on = _event_date(ctx, day, date, None) if (day or date) else to_local(utcnow(), ctx.user.timezone).date()
+    begin = datetime.combine(on, dt_time(0), tzinfo=tz).astimezone(dt_timezone.utc)
+    n = max(1, min(int(days or 7), 31))
+    occ = cal.expand(await ctx.repo.list_events(ctx.user.id), begin, begin + timedelta(days=n), ctx.user.timezone)
+    return {"from": f"{on:%d.%m}", "days": n,
+            "events": [{"id": o.event.id, "when": event_when(o, ctx.user.timezone)}
+                       | ({"location": o.event.location} if o.event.location else {}) for o in occ]}
+
+
+async def update_event(ctx: ToolContext, event_id: int, title: str | None = None, day: str | None = None,
+                       date: str | None = None, start: str | None = None, end: str | None = None,
+                       minutes: int | None = None, all_day: bool | None = None, days: int | None = None,
+                       rrule: str | None = None, location: str | None = None, notes: str | None = None,
+                       remind_before_minutes: int | None = None) -> dict:
+    event = await ctx.repo.get_event(ctx.user.id, int(event_id))
+    if event is None:
+        raise ToolError(f"события {event_id} нет")
+    fields: dict[str, Any] = {}
+    if span := _event_span(ctx, day, date, start, end, minutes, all_day, days, current=event):
+        fields["starts_at"], fields["ends_at"] = span
+    if all_day is not None:
+        fields["all_day"] = all_day
+    if title:
+        fields["title"] = strip_time_words(title)
+    if rrule is not None:
+        fields["rrule"] = _check_rrule(rrule)
+    if location is not None:
+        fields["location"] = location or None
+    if notes is not None:
+        fields["notes"] = notes or None
+    if remind_before_minutes is not None:
+        fields["remind_before"] = remind_before_minutes if remind_before_minutes >= 0 else None
+    event = await ctx.repo.update_event(ctx.user.id, event.id, **fields)
+    event = await ctx.repo.update_event(ctx.user.id, event.id,
+                                        next_reminder_at=cal.next_reminder(event, utcnow(), ctx.user.timezone, utcnow()))
+    ctx.events_touched.append(event)
+    return {"updated_event": event_view(event, ctx.user.timezone)}
+
+
+async def cancel_event(ctx: ToolContext, event_id: int) -> dict:
+    event = await ctx.repo.get_event(ctx.user.id, int(event_id))
+    if event is None:
+        raise ToolError(f"события {event_id} нет")
+    event = await ctx.repo.update_event(ctx.user.id, event.id, cancelled=True, next_reminder_at=None)
+    return {"cancelled_event": event.title}
+
+
 MAX_DRAFT_CHARS = 3500  # с запасом под лимит сообщения Telegram (4096)
 
 
@@ -825,6 +1047,9 @@ _REMIND_BEFORE = {
                    "маникюр, МФЦ, встреча, забрать посылку) — время на дорогу и сборы, обычно 30–90. "
                    "Просят «за день» — 1440, «за час» — 60.",
 }
+_EV_DAY = {"type": "string", "enum": DAY_KEYWORDS,
+           "description": "День словом: today, tomorrow, day_after_tomorrow или mon..sun (ближайший будущий)"}
+_EV_DATE = {"type": "string", "description": "Конкретная дата YYYY-MM-DD («15 декабря»); для «завтра», «в пятницу» — day"}
 _TIME_GUESSED = {
     "type": "boolean",
     "description": "true, если пользователь НЕ называл время и ты выбрал его сам по смыслу дела",
@@ -1100,6 +1325,64 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
              "required": ["enabled"]},
         ),
         set_auto_memory,
+    ),
+    "create_event": (
+        ToolSpec(
+            "create_event",
+            "Добавить событие в календарь — то, что занимает время: приём у врача, маникюр, встреча, созвон на час, "
+            "тренировка, концерт, поезд, отпуск. Не для дел «сделать что-то» — для них create_task.",
+            {"type": "object",
+             "properties": {
+                 "title": {"type": "string", "description": "Что за событие, без дня и времени"},
+                 "day": _EV_DAY, "date": _EV_DATE,
+                 "start": {"type": "string", "description": "Начало HH:MM"},
+                 "end": {"type": "string", "description": "Конец HH:MM, если назван"},
+                 "minutes": {"type": "integer", "description": "Длительность, если конец не назван: оцени по "
+                             "смыслу (маникюр 90, врач 60, встреча 60, тренировка 90)"},
+                 "all_day": {"type": "boolean", "description": "На весь день (отпуск, командировка, день рождения)"},
+                 "days": {"type": "integer", "description": "Сколько дней для all_day (отпуск на 10 дней — 10)"},
+                 "rrule": {**_RRULE, "description": "Повтор RFC 5545 без DTSTART: FREQ=WEEKLY;BYDAY=MO — "
+                           "для расписания («по понедельникам спортзал 19–21»)"},
+                 "location": {"type": "string", "description": "Где, если известно"},
+                 "notes": {"type": "string", "description": "Детали, если есть"},
+                 "remind_before_minutes": _REMIND_BEFORE,
+             },
+             "required": ["title"]},
+        ),
+        create_event,
+    ),
+    "list_events": (
+        ToolSpec("list_events", "Что в календаре на день или несколько дней («что у меня в четверг», «когда я свободна "
+                 "на неделе»). Ближайшая неделя уже есть в системном сообщении.",
+                 {"type": "object", "properties": {
+                     "day": _EV_DAY, "date": _EV_DATE,
+                     "days": {"type": "integer", "description": "Сколько дней показать, по умолчанию 7"}}}),
+        list_events,
+    ),
+    "update_event": (
+        ToolSpec("update_event", "Изменить событие: время, длительность, место, повтор, напоминание. Что не названо — "
+                 "остаётся как было (перенос на другой день сохраняет время и длительность).",
+                 {"type": "object",
+                  "properties": {
+                      "event_id": {"type": "integer", "description": "id события"},
+                      "title": {"type": "string"}, "day": _EV_DAY, "date": _EV_DATE,
+                      "start": {"type": "string", "description": "Новое начало HH:MM"},
+                      "end": {"type": "string", "description": "Новый конец HH:MM"},
+                      "minutes": {"type": "integer", "description": "Новая длительность"},
+                      "all_day": {"type": "boolean"}, "days": {"type": "integer"},
+                      "rrule": {**_RRULE, "description": "Новый повтор; пустая строка снимает повтор"},
+                      "location": {"type": "string"}, "notes": {"type": "string"},
+                      "remind_before_minutes": {**_REMIND_BEFORE, "description": _REMIND_BEFORE["description"]
+                                                + " -1 — не напоминать."},
+                  },
+                  "required": ["event_id"]}),
+        update_event,
+    ),
+    "cancel_event": (
+        ToolSpec("cancel_event", "Удалить событие из календаря (отменилось). Повторяющееся — целиком.",
+                 {"type": "object", "properties": {"event_id": {"type": "integer", "description": "id события"}},
+                  "required": ["event_id"]}),
+        cancel_event,
     ),
     "show_draft": (
         ToolSpec(

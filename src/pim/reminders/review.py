@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from pim.core import calendar as cal
 from pim.core.models import Task, TaskStatus, User
 from pim.core.repository import Repository
 from pim.core.timeutils import format_local, nearest_reasonable_time, next_occurrence, to_local
@@ -68,10 +69,15 @@ def next_day_due(task: Task, now: datetime, tz: str) -> datetime:
 async def evening_review(repo: Repository, user: User, now: datetime) -> Review:
     """Разбор с автопереносом: всё, чей срок уже прошёл, — на завтра; что ещё впереди сегодня — остаётся."""
     review = await build_review(repo, user, now)
+    events = await repo.list_events(user.id)
     for task in review.pending:
         if task.due_at > now:
             review.later.append(task)
-        elif moved := await repo.update_task(user.id, task.id, due_at=next_day_due(task, now, user.timezone)):
+            continue
+        due = next_day_due(task, now, user.timezone)
+        if not task.rrule:
+            due = cal.next_free(events, due, user.timezone)  # завтра в то же время, но не на встречу
+        if moved := await repo.update_task(user.id, task.id, due_at=due):
             review.moved.append(moved)
     review.pending = []
     return review
@@ -118,6 +124,9 @@ async def roll_over(repo: Repository, now: datetime) -> list[Task]:
         day_start = to_local(now, user.timezone).replace(hour=0, minute=0, second=0, microsecond=0)
         if task.due_at >= day_start:
             continue  # сегодняшнее — дело вечернего разбора
-        if updated := await repo.update_task(user.id, task.id, due_at=today_same_time(task, now, user.timezone)):
+        due = today_same_time(task, now, user.timezone)
+        if not task.rrule:
+            due = cal.next_free(await repo.list_events(user.id), due, user.timezone)
+        if updated := await repo.update_task(user.id, task.id, due_at=due):
             moved.append(updated)
     return moved

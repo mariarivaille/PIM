@@ -8,6 +8,7 @@ from sqlalchemy.orm import aliased
 
 from pim.core.models import (
     ChatMessage,
+    Event,
     TaskCard,
     DateAlert,
     Connection,
@@ -645,6 +646,43 @@ class Repository:
         if task:
             await self.log_event(user_id, TaskEventKind.CANCELLED, utcnow(), task_id=task_id)
         return task
+
+    # --- календарь ---
+
+    async def create_event(self, user_id: int, **fields) -> Event:
+        async with self._sm() as s, s.begin():
+            event = Event(user_id=user_id, **fields)
+            s.add(event)
+        return event
+
+    async def get_event(self, user_id: int, event_id: int) -> Event | None:
+        async with self._sm() as s:
+            event = await s.get(Event, event_id)
+            return event if event and event.user_id == user_id and not event.cancelled else None
+
+    async def update_event(self, user_id: int, event_id: int, **fields) -> Event | None:
+        async with self._sm() as s, s.begin():
+            event = await s.get(Event, event_id)
+            if not event or event.user_id != user_id:
+                return None
+            for k, v in fields.items():
+                setattr(event, k, v)
+            return event
+
+    async def list_events(self, user_id: int) -> list[Event]:
+        """Все действующие события пользователя (повторяющиеся разворачивает core/calendar.py)."""
+        async with self._sm() as s:
+            return list(await s.scalars(
+                select(Event).where(Event.user_id == user_id, Event.cancelled.is_(False)).order_by(Event.starts_at)
+            ))
+
+    async def due_event_reminders(self, now: datetime) -> list[tuple[Event, User]]:
+        async with self._sm() as s:
+            res = await s.execute(
+                select(Event, User).join(User, User.id == Event.user_id)
+                .where(Event.cancelled.is_(False), Event.next_reminder_at.is_not(None), Event.next_reminder_at <= now)
+            )
+            return [(e, u) for e, u in res.all()]
 
     async def add_task_card(self, task_id: int, chat_id: int, message_id: int) -> None:
         async with self._sm() as s, s.begin():

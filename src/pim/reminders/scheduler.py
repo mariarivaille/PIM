@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Protocol
 
+from pim.core.calendar import Occurrence, next_reminder, occurrences
 from pim.core.models import ItemList, ListItem, Task, User, utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
@@ -23,6 +24,8 @@ class Notifier(Protocol):
     async def send_reminder(self, user: User, task: Task, usual_snooze: int | None = None) -> None: ...
 
     async def send_digest(self, user: User, digest: Digest) -> None: ...
+
+    async def send_event_reminder(self, user: User, occurrence: Occurrence) -> None: ...
 
     async def send_review(self, user: User, review: Review) -> None: ...
 
@@ -65,6 +68,28 @@ class ReminderScheduler:
                 continue
             await self._repo.mark_reminded(task.id, now)
             sent += 1
+        return sent
+
+    async def tick_events(self) -> int:
+        """Напоминания о событиях календаря; у повторяющихся после отправки считается следующее."""
+        now = utcnow()
+        sent = 0
+        for event, user in await self._repo.due_event_reminders(now):
+            at = event.next_reminder_at
+            lead = timedelta(minutes=event.remind_before or 0)
+            # раз события, о котором напоминаем: начинается не раньше момента напоминания и не позже чем через lead
+            occ = next((o for o in occurrences(event, at - timedelta(seconds=1), at + lead + timedelta(minutes=1),
+                                               user.timezone) if o.start >= at - timedelta(seconds=1)), None)
+            if occ is not None and occ.end > now:
+                try:
+                    await self._notifier.send_event_reminder(user, occ)
+                except Exception:
+                    log.exception("failed to send reminder for event %s", event.id)
+                    continue
+                sent += 1
+            after = occ.start if occ is not None else now
+            await self._repo.update_event(user.id, event.id,
+                                          next_reminder_at=next_reminder(event, after, user.timezone, now))
         return sent
 
     async def tick_rollover(self) -> int:
@@ -184,8 +209,8 @@ class ReminderScheduler:
     async def run_forever(self) -> None:
         log.info("reminder scheduler started, poll every %ss", self._poll)
         while True:
-            for job in (self.tick_rollover, self.tick, self.tick_shared, self.tick_digests, self.tick_dates,
-                        self.tick_reviews, self.tick_reflection):
+            for job in (self.tick_rollover, self.tick, self.tick_events, self.tick_shared, self.tick_digests,
+                        self.tick_dates, self.tick_reviews, self.tick_reflection):
                 try:
                     await job()
                 except Exception:

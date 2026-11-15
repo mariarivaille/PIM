@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from pim.core.calendar import Occurrence, expand
 from pim.core.models import Task, User
 from pim.core.repository import Repository
 from pim.core.timeutils import to_local
@@ -20,10 +21,12 @@ class Digest:
     undated: list[Task] = field(default_factory=list)
     # важные даты из памяти (ДР, годовщины) на ближайшие DATES_HORIZON дней
     dates: list[UpcomingDate] = field(default_factory=list)
+    # события календаря на сегодня
+    events: list[Occurrence] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not (self.overdue or self.today or self.upcoming or self.undated or self.dates)
+        return not (self.overdue or self.today or self.upcoming or self.undated or self.dates or self.events)
 
 
 async def build_digest(repo: Repository, user: User, now: datetime) -> Digest:
@@ -41,6 +44,7 @@ async def build_digest(repo: Repository, user: User, now: datetime) -> Digest:
         else:
             digest.upcoming.append(task)
     digest.dates = await user_upcoming_dates(repo, user, now, DATES_HORIZON)
+    digest.events = expand(await repo.list_events(user.id), day_start, day_end, user.timezone)
     return digest
 
 

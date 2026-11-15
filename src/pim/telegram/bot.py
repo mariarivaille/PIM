@@ -9,6 +9,7 @@ from pim.agent.agent import Agent
 from pim.config import Settings
 from pim.core.models import ItemList, ListItem, Task, User, utcnow
 from pim.core.timeutils import humanize_until
+from pim.core.calendar import Occurrence
 from pim.core.repository import Repository
 from pim.reminders.digest import Digest
 from pim.reminders.dates import UpcomingDate
@@ -17,6 +18,7 @@ from pim.stt.base import Transcriber
 from pim.telegram.bot_helpers import invite_code
 from pim.telegram.cards import remember_card, remove_cards
 from pim.telegram.handlers import make_router
+from pim.telegram.keyboards import event_reminder_text
 from pim.telegram.keyboards import (
     assignment_kb,
     assignment_text,
@@ -84,6 +86,9 @@ class TelegramNotifier:
     async def send_digest(self, user: User, digest: Digest) -> None:
         await self._bot.send_message(user.chat_id, format_digest(digest, user.timezone))
 
+    async def send_event_reminder(self, user: User, occurrence: Occurrence) -> None:
+        await self._bot.send_message(user.chat_id, event_reminder_text(occurrence, user.timezone, utcnow()))
+
     async def send_date_alert(self, user: User, upcoming: UpcomingDate) -> None:
         await self._bot.send_message(user.chat_id, date_alert_text(upcoming), reply_markup=date_alert_kb(upcoming))
 
@@ -108,6 +113,7 @@ class TelegramNotifier:
 COMMANDS = [
     BotCommand(command="start", description="Начать и посмотреть настройки"),
     BotCommand(command="tasks", description="Список дел"),
+    BotCommand(command="calendar", description="Календарь на неделю"),
     BotCommand(command="lists", description="Списки: покупки, в поездку…"),
     BotCommand(command="digest", description="План на сегодня"),
     BotCommand(command="review", description="Разбор дня: несделанное — на завтра"),
