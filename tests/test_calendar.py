@@ -119,11 +119,16 @@ async def test_digest_calendar_and_review(repo, user):
 
 async def test_calendar_text(repo, user):
     event = await gym(repo, user)
-    await repo.create_task(user.id, "банк", due_at=parse_local("2030-11-18T11:00", TZ))
-    start = to_local(MON, TZ).replace(hour=0, minute=0).date()
-    occ = cal.expand([event], MON.replace(hour=0), MON + timedelta(days=7), TZ)
-    text = calendar_text(occ, await repo.list_open_tasks(user.id), start, TZ)
-    assert "пн 18.11" in text and text.index("⏰ 11:00 банк") < text.index("📅 19:00–21:00 спортзал")
+    trip = await repo.create_event(user.id, title="Отпуск", starts_at=parse_local("2031-01-01T00:00", TZ),
+                                   ends_at=parse_local("2031-01-11T00:00", TZ), all_day=True)
+    nails = await repo.create_event(user.id, title="Маникюр", starts_at=parse_local("2030-11-26T19:00", TZ),
+                                    ends_at=parse_local("2030-11-26T20:30", TZ))
+    past = await repo.create_event(user.id, title="Было", starts_at=parse_local("2030-11-01T19:00", TZ),
+                                   ends_at=parse_local("2030-11-01T20:00", TZ))
+    text = calendar_text([event, trip, nails, past], TZ, MON)
+    assert "🔁 по пн, 19:00–21:00 Спортзал" in text.replace("спортзал", "Спортзал")
+    assert text.index("вт 26.11") < text.index("ср 01.01")  # все будущие, по порядку — даже через полтора месяца
+    assert "весь день до пт 10.01 Отпуск" in text and "Было" not in text
     assert "🔔 напомню" not in event_card(event, TZ)  # next_reminder ещё не посчитан
 
 
@@ -142,10 +147,6 @@ async def test_shift_off_busy_time_is_reported(repo, user):
     assert "21:00" in res["created"]["moved_off_busy_time"]
 
 
-async def test_my_tasks_shows_upcoming_events(repo, user):
+async def test_my_tasks_has_no_events(repo, user):
     from pim.telegram.keyboards import tasks_text
-    event = await repo.create_event(user.id, title="Маникюр", starts_at=parse_local("2030-11-26T19:00", TZ),
-                                    ends_at=parse_local("2030-11-26T20:30", TZ))
-    occ = cal.expand([event], MON, MON + timedelta(days=14), TZ)
-    text = tasks_text([], TZ, occ)
-    assert "Открытых дел нет" in text and "вт 26.11 19:00–20:30 Маникюр" in text
+    assert tasks_text([], TZ) == "Открытых дел нет 🎉"  # события — только в календаре

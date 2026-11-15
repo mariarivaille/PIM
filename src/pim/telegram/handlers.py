@@ -12,7 +12,6 @@ from pim.agent.tools import with_reply
 from pim.telegram.format import md_to_html
 from pim.telegram.cards import delete_message, remember_card, remove_cards
 from pim.config import Settings
-from pim.core.calendar import expand
 from pim.core.models import utcnow
 from pim.core.repository import Repository
 from pim.core.timeutils import format_local, to_local
@@ -27,9 +26,7 @@ from pim.telegram.bot_helpers import INVITE_PREFIX, invite_code
 from pim.telegram.burst import Burster, Incoming
 from pim.telegram.keyboards import (
     CALENDAR_BUTTON,
-    CALENDAR_DAYS,
     MY_TASKS_BUTTON,
-    UPCOMING_EVENTS_DAYS,
     EventAction,
     calendar_text,
     event_card,
@@ -144,7 +141,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             "Например: «завтра в 10 позвонить в банк», «каждый вторник в 19 спортзал».\n\n"
             "Запоминаю важное о тебе: сам из разговоров или по просьбе — «запомни, что мама — Ольга, ДР 12 марта». "
             "Посмотреть — /memory, удалить — «удали факт 3».\n\n"
-            "/tasks — список дел\n/calendar — календарь на неделю\n/lists — списки (покупки, в поездку…)\n"
+            "/tasks — список дел\n/calendar — календарь: все события\n/lists — списки (покупки, в поездку…)\n"
             "/digest — сводка на сегодня\n/review — разбор дня: несделанное на завтра\n"
             "/memory — что я о тебе знаю\n/habits — твои привычки по времени\n"
             "/people — близкие: поручения и общие списки\n/invite — пригласить близкого\n"
@@ -286,10 +283,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     @router.message(F.text == CALENDAR_BUTTON)
     async def calendar(message: Message):
         user = await ensure_user(message)
-        start = to_local(utcnow(), user.timezone).replace(hour=0, minute=0, second=0, microsecond=0)
-        occ = expand(await repo.list_events(user.id), start, start + timedelta(days=CALENDAR_DAYS), user.timezone)
-        tasks = await repo.list_open_tasks(user.id)
-        await message.answer(calendar_text(occ, tasks, start.date(), user.timezone), reply_markup=main_menu())
+        events = await repo.list_events(user.id)
+        await message.answer(calendar_text(events, user.timezone, utcnow()), reply_markup=main_menu())
 
     @router.callback_query(EventAction.filter(F.action == "cancel"))
     async def on_event_cancel(cb: CallbackQuery, callback_data: EventAction):
@@ -307,10 +302,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
     async def tasks(message: Message):
         user = await ensure_user(message)
         items = await repo.list_open_tasks(user.id)
-        start = to_local(utcnow(), user.timezone).replace(hour=0, minute=0, second=0, microsecond=0)
-        events = expand(await repo.list_events(user.id), max(start, utcnow()),
-                        start + timedelta(days=UPCOMING_EVENTS_DAYS), user.timezone)
-        await message.answer(tasks_text(items, user.timezone, events), reply_markup=main_menu())
+        await message.answer(tasks_text(items, user.timezone), reply_markup=main_menu())
         if items:
             await repo.add_messages(user.id, ("user", MY_TASKS_BUTTON),
                                     ("assistant", tasks_context(items, user.timezone)), at=utcnow())

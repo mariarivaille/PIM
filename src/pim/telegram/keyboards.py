@@ -480,38 +480,56 @@ def event_reminder_text(occ: Occurrence, tz: str, now) -> str:
     return "\n".join(lines)
 
 
-CALENDAR_DAYS = 7
+_RRULE_DAYS = {"MO": "пн", "TU": "вт", "WE": "ср", "TH": "чт", "FR": "пт", "SA": "сб", "SU": "вс"}
 
 
-def calendar_text(occ: list[Occurrence], tasks: list[Task], start_day, tz: str) -> str:
-    """«📅 Календарь»: неделя по дням — события отрезками, дела со временем — точками."""
-    lines = ["📅 <b>Календарь на неделю</b>"]
-    any_day = False
-    for i in range(CALENDAR_DAYS):
-        day = start_day + timedelta(days=i)
-        items = []
-        for o in occ:
-            if to_local(o.start, tz).date() <= day < to_local(o.end - timedelta(seconds=1), tz).date() + timedelta(days=1):
-                key = "00:00" if o.event.all_day else f"{to_local(o.start, tz):%H:%M}"
-                if o.event.all_day or to_local(o.start, tz).date() == day:
-                    items.append((key, f"📅 {_event_time(o, tz)} {html.escape(o.event.title)}"))
-        for t in tasks:
-            if t.due_at and to_local(t.due_at, tz).date() == day:
-                items.append((f"{to_local(t.due_at, tz):%H:%M}", f"⏰ {to_local(t.due_at, tz):%H:%M} {html.escape(t.title)}"))
-        if not items:
-            continue
-        any_day = True
-        label = "Сегодня" if i == 0 else "Завтра" if i == 1 else ""
-        lines.append(f"\n<b>{WEEKDAYS_RU[day.weekday()]} {day:%d.%m}</b>" + (f" · {label}" if label else ""))
-        lines += [text for _, text in sorted(items, key=lambda x: x[0])]
-    if not any_day:
-        lines.append("\nНа неделю ничего нет. Скажи, например: «маникюр в субботу в 12» или "
-                     "«по понедельникам спортзал с 19 до 21».")
+def rrule_text(event: Event, tz: str) -> str:
+    """«по пн», «по пн, ср», «каждый день», «каждый месяц 5-го» — для блока «Регулярно»."""
+    parts = dict(p.split("=", 1) for p in (event.rrule or "").split(";") if "=" in p)
+    start = to_local(event.starts_at, tz)
+    freq, interval = parts.get("FREQ"), int(parts.get("INTERVAL", "1") or 1)
+    if freq == "DAILY":
+        return "каждый день" if interval == 1 else f"раз в {interval} дн."
+    if freq == "WEEKLY":
+        days = [_RRULE_DAYS.get(d[-2:], d) for d in parts.get("BYDAY", "").split(",") if d] \
+            or [WEEKDAYS_RU[start.weekday()]]
+        return ("по " if interval == 1 else f"раз в {interval} нед. по ") + ", ".join(days)
+    if freq == "MONTHLY":
+        return f"каждый месяц {start.day}-го"
+    if freq == "YEARLY":
+        return f"каждый год {start:%d.%m}"
+    return "повторяется"
+
+
+def calendar_text(events: list[Event], tz: str, now) -> str:
+    """«📅 Календарь»: регулярные события одним блоком, разовые — все будущие, по дням."""
+    lines = ["📅 <b>Календарь</b>"]
+    recurring = [e for e in events if e.rrule]
+    single = sorted((e for e in events if not e.rrule and e.ends_at > now), key=lambda e: e.starts_at)
+    if not recurring and not single:
+        lines.append("\nПусто. Скажи, например: «маникюр в субботу в 12» или «по понедельникам спортзал с 19 до 21».")
+        return "\n".join(lines)
+    if recurring:
+        lines.append("\n<b>Регулярно:</b>")
+        for e in recurring:
+            occ = Occurrence(e, e.starts_at, e.ends_at)
+            lines.append(f"🔁 {rrule_text(e, tz)}, {_event_time(occ, tz)} {html.escape(e.title)}")
+    today = to_local(now, tz).date()
+    day = None
+    for e in single:
+        start = to_local(e.starts_at, tz)
+        if start.date() != day:
+            day = start.date()
+            label = " · Сегодня" if day == today else " · Завтра" if day == today + timedelta(days=1) else ""
+            lines.append(f"\n<b>{WEEKDAYS_RU[day.weekday()]} {day:%d.%m}</b>{label}")
+        occ = Occurrence(e, e.starts_at, e.ends_at)
+        if e.all_day:
+            last = to_local(e.ends_at, tz) - timedelta(days=1)
+            span = "весь день" + (f" до {WEEKDAYS_RU[last.weekday()]} {last:%d.%m}" if last.date() > start.date() else "")
+        else:
+            span = _event_time(occ, tz)
+        lines.append(f"📅 {span} {html.escape(e.title)}" + (f" · 📍 {html.escape(e.location)}" if e.location else ""))
     return _fit(lines)
-
-
-
-UPCOMING_EVENTS_DAYS = 14
 
 
 def tasks_text(tasks: list[Task], tz: str, events: list[Occurrence] | None = None) -> str:
@@ -527,16 +545,7 @@ def tasks_text(tasks: list[Task], tz: str, events: list[Occurrence] | None = Non
         lines.append(f"{i}. {html.escape(t.title)}{due}{rep}")
         if t.notes:
             lines.append(f"    <i>{html.escape(t.notes)}</i>")
-    if not tasks:
-        lines.append("Открытых дел нет 🎉")
-    if events:
-        lines.append(f"\n📅 <b>В календаре на {UPCOMING_EVENTS_DAYS} дней</b>")
-        for o in events:
-            start = to_local(o.start, tz)
-            lines.append(f"• {WEEKDAYS_RU[start.weekday()]} {start:%d.%m} {_event_time(o, tz)} "
-                         f"{html.escape(o.event.title)}" + (" 🔁" if o.event.rrule else ""))
-    if tasks:
-        lines.append("\nЧтобы закрыть или перенести — напиши, например: «второе сделано», «третье на пятницу».")
+    lines.append("\nЧтобы закрыть или перенести — напиши, например: «второе сделано», «третье на пятницу».")
     return _fit(lines)
 
 

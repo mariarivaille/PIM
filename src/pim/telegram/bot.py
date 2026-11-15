@@ -113,7 +113,7 @@ class TelegramNotifier:
 COMMANDS = [
     BotCommand(command="start", description="Начать и посмотреть настройки"),
     BotCommand(command="tasks", description="Список дел"),
-    BotCommand(command="calendar", description="Календарь на неделю"),
+    BotCommand(command="calendar", description="Календарь: все события"),
     BotCommand(command="lists", description="Списки: покупки, в поездку…"),
     BotCommand(command="digest", description="План на сегодня"),
     BotCommand(command="review", description="Разбор дня: несделанное — на завтра"),
