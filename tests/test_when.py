@@ -128,7 +128,7 @@ async def test_remind_before_event(repo, user):
 async def test_going_out_gets_lead_time(repo, user):
     from datetime import timedelta
     ctx = ToolContext(repo, user)
-    args = {"title": "маникюр", "due_at": "2030-11-23T12:00"}
+    args = {"title": "забрать посылку на почте", "due_at": "2030-11-23T12:00"}
     assert "дороги" in (await run_tool(ctx, "create_task", args))["error"]  # просим подумать о дороге
     await run_tool(ctx, "create_task", {**args, "remind_before_minutes": 45})
     task = ctx.touched[0]
@@ -227,3 +227,36 @@ async def test_repeated_task_is_not_duplicated(repo, user):
     await run_tool(ToolContext(repo, user), "create_task", {"title": "забрать права", "due_at": "2030-11-24T10:00",
                                                             "remind_before_minutes": 0})
     assert len(await repo.list_open_tasks(user.id)) == 2  # другой день — отдельное дело
+
+
+async def test_named_date_beats_nearest_weekday(repo, user):
+    from pim.core.timeutils import explicit_dates
+    from datetime import date
+    today = date(2026, 11, 15)
+    assert explicit_dates("Маникюр 26 ноября четверг в 19", today) == [date(2026, 11, 26)]
+    assert explicit_dates("до 5.01 сдать, в 19.30 созвон", today) == [date(2027, 1, 5)]  # 19.30 — время
+    # модель передала day=thu, а пользователь назвал 26 ноября (тоже четверг) — берём дату
+    ctx = ToolContext(repo, user, user_text=".",
+                      message_text="[В ответ на своё сообщение: «Маникюр 26 ноября четверг в 19»]\n.")
+    weekday_of_26 = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][explicit_dates("26 ноября", to_local(
+        utcnow(), TZ).date())[0].weekday()]
+    res = await run_tool(ctx, "create_event", {"title": "маникюр", "day": weekday_of_26, "start": "19:00",
+                                               "minutes": 90, "remind_before_minutes": 90})
+    assert "26.11 19:00" in res["created_event"]["when"]
+    # другая дата в тексте с другим днём недели не мешает: «до 22 ноября подать, напомни в пятницу»
+    ctx = ToolContext(repo, user, message_text="до 22 ноября подать, напомни в пятницу")
+    target = explicit_dates("22 ноября", to_local(utcnow(), TZ).date())[0]
+    other = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][(target.weekday() + 1) % 7]
+    res = await run_tool(ctx, "create_task", {"title": "подать", "day": other, "time": "19:00"})
+    assert f"{target:%d.%m}" not in res["created"]["due"]
+
+
+async def test_appointment_as_task_suggests_event(repo, user):
+    ctx = ToolContext(repo, user)
+    res = await run_tool(ctx, "create_task", {"title": "сделать маникюр", "due_at": "2030-11-26T19:00",
+                                              "remind_before_minutes": 90})
+    assert "create_event" in res["error"]
+    # «записаться на маникюр» — это дело, не событие
+    res = await run_tool(ToolContext(repo, user), "create_task", {"title": "записаться на маникюр",
+                                                                  "due_at": "2030-11-20T12:00"})
+    assert "created" in res

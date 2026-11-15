@@ -1,6 +1,6 @@
 import math
 import re
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from dateutil.rrule import rrulestr
@@ -124,3 +124,35 @@ def strip_time_words(title: str) -> str:
     cleaned = _TIME_PHRASES.sub(" ", title)
     cleaned = re.sub(r"\s+([,.!?])", r"\1", re.sub(r"\s{2,}", " ", cleaned)).strip(" ,.-—")
     return cleaned if len(cleaned) >= 2 else title
+
+
+_MONTHS = ["январ", "феврал", "март", "апрел", "ма", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"]
+_DATE_WORDS = re.compile(r"(?<!\d)(\d{1,2})\s+(январ|феврал|марта?|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр)\w*",
+                         re.IGNORECASE)
+_DATE_DOTS = re.compile(r"(?<![\d.:])(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?(?![\d:])")
+
+
+def explicit_dates(text: str, today: date) -> list[date]:
+    """Даты, названные в тексте числом: «26 ноября», «26.11», «26.11.2026». Без года — ближайшая будущая."""
+    found: list[date] = []
+
+    def add(day: int, month: int, year: int | None) -> None:
+        try:
+            d = date(year or today.year, month, day)
+        except ValueError:
+            return
+        if year is None and d < today:
+            d = d.replace(year=d.year + 1)
+        if d not in found:
+            found.append(d)
+
+    for m in _DATE_WORDS.finditer(text):
+        word = m.group(2).lower()
+        month = next(i for i, stem in enumerate(_MONTHS, 1) if word.startswith(stem))
+        add(int(m.group(1)), month, None)
+    for m in _DATE_DOTS.finditer(text):
+        year = int(m.group(3)) if m.group(3) else None
+        if year is not None and year < 100:
+            year += 2000
+        add(int(m.group(1)), int(m.group(2)), year)
+    return found

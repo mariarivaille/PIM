@@ -26,6 +26,7 @@ from pim.core.timeutils import (
     parse_local,
     plural_ru,
     resolve_day_time,
+    explicit_dates,
     strip_time_words,
     to_local,
 )
@@ -69,6 +70,7 @@ class ToolContext:
     drafts: list[str] = field(default_factory=list)
     asked_draft_details: bool = False
     asked_lead_time: bool = False
+    asked_event_kind: bool = False
     # события календаря, созданные или изменённые за ход — телеграм-слой покажет карточки
     events_touched: list = field(default_factory=list)
     # привычки по времени (learning/timing.py) — для времени по умолчанию
@@ -79,6 +81,8 @@ class ToolContext:
     # текст сообщения пользователя и предыдущий ответ бота: по ним проверяем, просил ли он что-то запомнить
     user_text: str = ""
     prev_assistant: str = ""
+    # всё сообщение, включая процитированное (ответ на «Маникюр 26 ноября в 19») — для поиска названных дат
+    message_text: str = ""
 
 
 # Явная просьба запомнить. Посреди разговора факты пишутся в память только по ней (остальное подберёт
@@ -130,6 +134,20 @@ GOING_OUT = re.compile(
     r"сходить|съездить|сгонять|поехать|пойти|забрать|отвезти|отнести|встреч|врач|стоматолог|зубн|терапевт|"
     r"анализ|маникюр|педикюр|стрижк|парикмахер|салон|барбер|мфц|почт|пвз|пункт выдачи|аэропорт|вокзал|"
     r"поезд|самол[её]т|кино|театр|концерт|ресторан|кафе|спортзал|тренировк|бассейн|приём|прием|собеседован",
+    re.IGNORECASE,
+)
+
+
+# Записи и встречи — это события календаря, а не дела; «записаться на маникюр» — дело (TODO_VERB)
+EVENT_LIKE = re.compile(
+    r"маникюр|педикюр|стрижк|парикмахер|барбер|салон|врач|стоматолог|зубн|терапевт|приём|прием|массаж|"
+    r"встреч|свидани|концерт|спектакл|театр|кино|тренировк|спортзал|бассейн|йог|урок|занятие|собеседован|"
+    r"поезд|самол[её]т|рейс",
+    re.IGNORECASE,
+)
+TODO_VERB = re.compile(
+    r"(записат|позвонит|купит|оплатит|отменит|перенест|забронир|найти|узнат|выбрат|подготов|собрат|"
+    r"заказат|написат|отправит|спросит|договорит|напомнит)",
     re.IGNORECASE,
 )
 
@@ -207,6 +225,17 @@ def _said_in_comment(ctx: ToolContext, day: str | None, in_minutes: int | None) 
     return bool(word) and word in comment
 
 
+def _named_date(ctx: ToolContext, day: str | None) -> date | None:
+    """«Маникюр 26 ноября, четверг» — модель передаёт day=thu, и код выбрал бы ближайший четверг (19.11).
+    Если в сообщении названа дата с тем же днём недели — берём её."""
+    if not day or day not in DAY_KEYWORDS[3:]:
+        return None
+    weekday = DAY_KEYWORDS.index(day) - 3
+    today = to_local(utcnow(), ctx.user.timezone).date()
+    named = explicit_dates(ctx.message_text or ctx.user_text, today)
+    return next((d for d in sorted(named) if d.weekday() == weekday), None)
+
+
 def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: str | None,
                  in_minutes: int | None, time_guessed: bool = False) -> tuple[datetime | None, bool]:
     """Время напоминания из того, что дала модель. Даты считает код, а не LLM.
@@ -232,10 +261,15 @@ def _resolve_due(ctx: ToolContext, due_at: str | None, day: str | None, time: st
             at = parse_hhmm(time) if time else None
         except ValueError as e:
             raise ToolError(f"time нужно в формате HH:MM, получено {time!r}") from e
-        due = resolve_day_time(base, ctx.user.timezone, day, at)
-        if at is None:
-            weekend = to_local(due, ctx.user.timezone).weekday() >= 5
-            due = resolve_day_time(base, ctx.user.timezone, day, _default_time(ctx, weekend))
+        if named := _named_date(ctx, day):
+            zone = ZoneInfo(ctx.user.timezone)
+            pick = at or _default_time(ctx, named.weekday() >= 5)
+            due = datetime.combine(named, pick, tzinfo=zone).astimezone(dt_timezone.utc)
+        else:
+            due = resolve_day_time(base, ctx.user.timezone, day, at)
+            if at is None:
+                weekend = to_local(due, ctx.user.timezone).weekday() >= 5
+                due = resolve_day_time(base, ctx.user.timezone, day, _default_time(ctx, weekend))
         auto = at is None or bool(time_guessed)
     else:
         return None, False
@@ -344,10 +378,16 @@ async def create_task(ctx: ToolContext, title: str, due_at: str | None = None, d
         due, auto = nearest_reasonable_time(utcnow(), ctx.user.timezone), True
     else:
         due, auto = _resolve_due(ctx, due_at, day, time, in_minutes, time_guessed)
+    if due and not ctx.asked_event_kind and EVENT_LIKE.search(title) and not TODO_VERB.match(title.strip()):
+        # «маникюр в чт в 19» модель пишет делом, хотя это запись — она занимает время и должна быть в календаре
+        ctx.asked_event_kind = True
+        raise ToolError("это похоже на запись или встречу, которая занимает время (маникюр, врач, встреча…) — "
+                        "это событие календаря: вызови create_event (start, minutes, remind_before_minutes). "
+                        "Если это именно дело «сделать что-то» — повтори create_task")
     if rrule and not due:
         raise ToolError("для повторяющейся задачи нужен due_at первого срабатывания")
     if (remind_before_minutes is None and due and not ctx.asked_lead_time and due > utcnow()
-            and GOING_OUT.search(title)):
+            and GOING_OUT.search(title) and not TODO_VERB.match(title.strip())):
         # «маникюр в 12» без запаса — напоминание придёт, когда уже пора быть на месте
         ctx.asked_lead_time = True
         raise ToolError(
@@ -742,6 +782,8 @@ def _event_date(ctx: ToolContext, day: str | None, date_: str | None, start_at: 
             raise ToolError(f"date нужна в формате YYYY-MM-DD, получено {date_!r}") from e
     if day and day not in DAY_KEYWORDS:
         raise ToolError(f"day должен быть одним из {DAY_KEYWORDS}, получено {day!r}")
+    if named := _named_date(ctx, day):
+        return named
     return to_local(resolve_day_time(utcnow(), tz, day, start_at or dt_time(0, 1)), tz).date()
 
 

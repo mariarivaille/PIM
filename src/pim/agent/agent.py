@@ -234,7 +234,8 @@ class Agent:
         history = await self.history.get(user.id)
         prev_assistant = next((m.content for m in reversed(history) if m.role == "assistant"), "")
         profile = await load_profile(self._repo, user)
-        ctx = ToolContext(repo=self._repo, user=user, user_text=own_words(text), prev_assistant=prev_assistant,
+        ctx = ToolContext(repo=self._repo, user=user, user_text=own_words(text), message_text=text,
+                          prev_assistant=prev_assistant,
                           max_memories=self._max_memories, reference_time=reference_time, profile=profile,
                           adjust_task=adjust_task,
                           searcher=self._searcher, searches_left=self._searches_per_turn)
