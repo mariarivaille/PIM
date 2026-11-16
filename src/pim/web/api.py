@@ -235,5 +235,5 @@ async def serve(app: FastAPI, host: str, port: int) -> None:
         def capture_signals(self):
             yield
 
-    await _Server(uvicorn.Config(app, host=host, port=port, log_level="warning", proxy_headers=True,
+    await _Server(uvicorn.Config(app, host=host, port=port, log_level="warning", lifespan="off", proxy_headers=True,
                                  forwarded_allow_ips="127.0.0.1")).serve()
