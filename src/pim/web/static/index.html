@@ -81,7 +81,6 @@
   .period .emoji { font-size: 22px; }
   .empty { text-align: center; color: var(--hint); padding: 26px 20px; font-size: 15px; }
   .empty .big { font-size: 34px; display: block; margin-bottom: 6px; }
-  .num { flex: none; width: 24px; color: var(--hint); font-size: 13px; padding-top: 2px; font-variant-numeric: tabular-nums; }
   .foot { font-size: 13px; color: var(--hint); margin: 10px 4px 0; }
   .err { margin: 40px 20px; text-align: center; color: var(--hint); }
   .hidden { display: none !important; }
@@ -263,14 +262,14 @@ function renderMemory() {
     return;
   }
   el.innerHTML = sections.map((s) => `<h2>${esc(s.title)}</h2><div class="card">${s.items.map((m) =>
-      `<div class="row" data-memory="${m.number}"><span class="num">${m.number}</span><div class="body"><div class="title">${esc(m.content)}</div>
+      `<div class="row plain" data-memory="${m.number}"><div class="body"><div class="title">${esc(m.content)}</div>
        ${m.until ? `<div class="meta">до ${esc(m.until)}</div>` : ""}</div></div>`).join("")}</div>`).join("") +
     `<div class="foot">${memory.auto ? "Запоминаю важное из разговоров сам." : "Запоминаю только по просьбе."} Нажми на факт, чтобы удалить.</div>`;
 }
 
 async function memoryMenu(number) {
   const m = memory.sections.flatMap((s) => s.items).find((x) => x.number === number);
-  const choice = await ask(`Забыть факт ${number}?\n«${m ? m.content : ""}»`, [{id: "forget", type: "destructive", text: "Забыть"}]);
+  const choice = await ask(`Забыть?\n«${m ? m.content : ""}»`, [{id: "forget", type: "destructive", text: "Забыть"}]);
   if (choice === "forget") {
     try { await api(`/api/memory/${number}`, {method: "DELETE"}); haptic("warning"); loadMemory(); }
     catch (e) { alertMsg(e.message); }
