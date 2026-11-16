@@ -286,8 +286,8 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             await message.answer("Приложение пока не подключено.")
             return
         kb = InlineKeyboardBuilder()
-        kb.button(text="📱 Открыть Pim", web_app=WebAppInfo(url=settings.webapp_url))
-        await message.answer("Дела, календарь и память — на одном экране. Его же открывает кнопка «Pim» "
+        kb.button(text="📱 Открыть PIM", web_app=WebAppInfo(url=settings.webapp_url))
+        await message.answer("Дела, календарь и память — на одном экране. Его же открывает кнопка «PIM» "
                              "слева от поля ввода.", reply_markup=kb.as_markup())
 
     @router.message(Command("calendar"))

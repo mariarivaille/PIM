@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Pim</title>
+<title>PIM</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
@@ -89,7 +89,7 @@
 </head>
 <body>
 <div class="top">
-  <div class="hello" id="hello">Pim</div>
+  <div class="hello" id="hello">PIM</div>
   <nav class="tabs" role="tablist">
     <button data-tab="tasks" class="on">Дела</button>
     <button data-tab="calendar">Календарь</button>
@@ -277,10 +277,10 @@ function alertMsg(text) { if (tg && tg.showAlert) tg.showAlert(text); else windo
 async function load() {
   try {
     state = await api("/api/state");
-    $("#hello").textContent = state.user.name ? `Привет, ${state.user.name.split(" ")[0]}!` : "Pim";
+    $("#hello").textContent = state.user.name ? `Привет, ${state.user.name.split(" ")[0]}!` : "PIM";
     renderTasks(); renderCalendar();
   } catch (e) {
-    showError(e.status === 401 ? "Открой Pim из Telegram — через кнопку меню в чате с ботом."
+    showError(e.status === 401 ? "Открой PIM из Telegram — через кнопку меню в чате с ботом."
       : e.status === 403 ? "Сначала напиши боту в Telegram." : "Не получилось загрузить: " + e.message);
   }
 }

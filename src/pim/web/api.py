@@ -93,7 +93,7 @@ def memory_json(m: Memory, tz: str) -> dict[str, Any]:
 
 def create_app(repo: Repository, bot_token: str, on_task_changed=None) -> FastAPI:
     """on_task_changed(task_id) — убрать из чата карточки дела, закрытого в Mini App (telegram/cards.py)."""
-    app = FastAPI(title="Pim", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="PIM", docs_url=None, redoc_url=None, openapi_url=None)
 
     async def current_user(authorization: str = Header(default="")) -> User:
         scheme, _, init_data = authorization.partition(" ")
