@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pim</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --bg2: var(--tg-theme-secondary-bg-color, #f2f2f6);
+    --section: var(--tg-theme-section-bg-color, var(--bg));
+    --text: var(--tg-theme-text-color, #111111);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --link: var(--tg-theme-link-color, #2f7d4f);
+    --accent: var(--tg-theme-button-color, #2f9e5f);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --danger: var(--tg-theme-destructive-text-color, #e5484d);
+    --sep: color-mix(in srgb, var(--hint) 22%, transparent);
+    --event: color-mix(in srgb, var(--accent) 16%, var(--section));
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not(.tg) {
+      --bg: #17181a; --bg2: #0f1011; --section: #1f2023; --text: #f2f2f2; --hint: #8d8f94;
+      --link: #6fd39b; --accent: #3bb371;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg2); color: var(--text);
+    font: 16px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; }
+  body { padding: 0 0 calc(24px + env(safe-area-inset-bottom)); }
+  .top { position: sticky; top: 0; z-index: 5; background: var(--bg2); padding: 12px 16px 10px; }
+  .hello { font-size: 13px; color: var(--hint); margin: 0 4px 8px; }
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); background: color-mix(in srgb, var(--hint) 14%, var(--bg2));
+    border-radius: 11px; padding: 3px; gap: 3px; }
+  .tabs button { border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; font-weight: 500;
+    padding: 7px 0; border-radius: 9px; cursor: pointer; }
+  .tabs button.on { background: var(--section); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  main { padding: 0 16px; }
+  h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--hint);
+    margin: 20px 4px 7px; }
+  h2.danger { color: var(--danger); }
+  .card { background: var(--section); border-radius: var(--radius); overflow: hidden; }
+  .row { display: flex; gap: 12px; align-items: flex-start; padding: 11px 14px; position: relative; cursor: pointer;
+    transition: opacity .25s, transform .25s; }
+  .row + .row::before { content: ""; position: absolute; top: 0; left: 50px; right: 0; border-top: 1px solid var(--sep); }
+  .row.plain + .row.plain::before { left: 14px; }
+  .row.gone { opacity: 0; transform: translateX(24px); }
+  .check { flex: none; width: 24px; height: 24px; margin-top: 1px; border-radius: 50%; border: 2px solid var(--hint);
+    background: transparent; padding: 0; cursor: pointer; position: relative; }
+  .check:active { transform: scale(.9); }
+  .check.done { background: var(--accent); border-color: var(--accent); }
+  .check.done::after { content: ""; position: absolute; left: 7px; top: 3px; width: 6px; height: 11px;
+    border: solid var(--accent-text); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  .body { flex: 1; min-width: 0; }
+  .title { overflow-wrap: anywhere; }
+  .meta { font-size: 13px; color: var(--hint); margin-top: 2px; }
+  .meta .late { color: var(--danger); }
+  .notes { font-size: 13px; color: var(--hint); margin-top: 3px; font-style: italic; overflow-wrap: anywhere; }
+  .time { flex: none; width: 50px; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--hint); padding-top: 1px; }
+  .time b { display: block; color: var(--text); font-weight: 600; }
+  .ev { border-left: 3px solid var(--accent); padding-left: 10px; margin-left: -2px; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-left: 4px;
+    background: color-mix(in srgb, var(--hint) 18%, transparent); color: var(--hint); vertical-align: 1px; }
+  .strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px 6px; margin: 14px -16px 0; padding-left: 16px;
+    scroll-snap-type: x proximity; scrollbar-width: none; }
+  .strip::-webkit-scrollbar { display: none; }
+  .day { flex: none; width: 46px; padding: 7px 0 8px; border-radius: 12px; background: var(--section); text-align: center;
+    border: 0; color: var(--text); font: inherit; cursor: pointer; scroll-snap-align: start; }
+  .day small { display: block; font-size: 11px; color: var(--hint); text-transform: uppercase; }
+  .day .n { font-size: 18px; font-weight: 600; }
+  .day.weekend small { color: var(--danger); }
+  .day .dot { display: block; height: 5px; margin-top: 3px; }
+  .day .dot i { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin: 0 1px; }
+  .day.on { background: var(--accent); color: var(--accent-text); }
+  .day.on small { color: color-mix(in srgb, var(--accent-text) 80%, transparent); }
+  .day.on .dot i { background: var(--accent-text); }
+  .period { display: flex; gap: 12px; align-items: center; padding: 12px 14px; background: var(--event); border-radius: var(--radius);
+    margin-top: 10px; cursor: pointer; }
+  .period .emoji { font-size: 22px; }
+  .empty { text-align: center; color: var(--hint); padding: 26px 20px; font-size: 15px; }
+  .empty .big { font-size: 34px; display: block; margin-bottom: 6px; }
+  .num { flex: none; width: 24px; color: var(--hint); font-size: 13px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+  .foot { font-size: 13px; color: var(--hint); margin: 10px 4px 0; }
+  .err { margin: 40px 20px; text-align: center; color: var(--hint); }
+  .hidden { display: none !important; }
+  .skeleton { height: 56px; border-radius: var(--radius); background: var(--section); margin-top: 20px; opacity: .6; }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="hello" id="hello">Pim</div>
+  <nav class="tabs" role="tablist">
+    <button data-tab="tasks" class="on">Дела</button>
+    <button data-tab="calendar">Календарь</button>
+    <button data-tab="memory">Память</button>
+  </nav>
+</div>
+<main>
+  <section id="tasks"><div class="skeleton"></div><div class="skeleton"></div></section>
+  <section id="calendar" class="hidden"></section>
+  <section id="memory" class="hidden"></section>
+  <div id="error" class="err hidden"></div>
+</main>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg && tg.initData) { document.documentElement.classList.add("tg"); tg.ready(); tg.expand(); }
+
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+let state = null, memory = null, selectedDay = null, tab = "tasks";
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {...options, headers: {...(options.headers || {}), Authorization: "tma " + (tg ? tg.initData : "")}});
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch (e) {}
+    const err = new Error(detail); err.status = res.status; throw err;
+  }
+  return res.json();
+}
+
+function haptic(kind) { try { tg.HapticFeedback.notificationOccurred(kind); } catch (e) {} }
+
+function ask(message, buttons) {
+  // buttons: [{id, text, type}] → id нажатой кнопки или null
+  return new Promise((resolve) => {
+    if (tg && tg.showPopup && tg.isVersionAtLeast && tg.isVersionAtLeast("6.2")) {
+      tg.showPopup({message, buttons: [...buttons, {type: "cancel"}]}, (id) => resolve(id || null));
+    } else {
+      resolve(window.confirm(message) ? buttons[0].id : null);
+    }
+  });
+}
+
+function showError(text) {
+  $("#error").textContent = text; $("#error").classList.remove("hidden");
+  for (const s of ["tasks", "calendar", "memory"]) $("#" + s).classList.add("hidden");
+}
+
+/* ---------- Дела ---------- */
+const GROUPS = [["overdue", "Просрочено"], ["today", "Сегодня"], ["tomorrow", "Завтра"], ["later", "Позже"], ["nodate", "Без срока"]];
+
+function taskRow(t) {
+  const meta = [];
+  if (t.due) meta.push(t.group === "today" || t.group === "tomorrow" ? t.time : t.due);
+  if (t.in && t.group !== "overdue") meta.push(t.in);
+  if (t.group === "overdue") meta.push('<span class="late">просрочено</span>');
+  if (t.recurring) meta.push("🔁");
+  if (t.from) meta.push("от " + esc(t.from));
+  return `<div class="row" data-task="${t.id}">
+    <button class="check" data-done="${t.id}" aria-label="Сделано"></button>
+    <div class="body"><div class="title">${esc(t.title)}</div>
+      ${meta.length ? `<div class="meta">${meta.join(" · ")}</div>` : ""}
+      ${t.remind ? `<div class="meta">🔔 ${esc(t.remind)}</div>` : ""}
+      ${t.notes ? `<div class="notes">${esc(t.notes)}</div>` : ""}</div></div>`;
+}
+
+function renderTasks() {
+  const el = $("#tasks");
+  if (!state.tasks.length) {
+    el.innerHTML = `<div class="empty"><span class="big">🎉</span>Открытых дел нет.<br>Напиши боту — запишу и напомню.</div>`;
+    return;
+  }
+  el.innerHTML = GROUPS.map(([g, title]) => {
+    const items = state.tasks.filter((t) => t.group === g);
+    return items.length ? `<h2 class="${g === "overdue" ? "danger" : ""}">${title}</h2><div class="card">${items.map(taskRow).join("")}</div>` : "";
+  }).join("") + `<div class="foot">Нажми на кружок, чтобы отметить сделанным, или на дело — чтобы удалить.</div>`;
+}
+
+async function completeTask(id, row) {
+  const check = row.querySelector(".check");
+  check.classList.add("done"); haptic("success");
+  try {
+    await api(`/api/tasks/${id}/done`, {method: "POST"});
+    row.classList.add("gone");
+    setTimeout(load, 280);
+  } catch (e) { check.classList.remove("done"); alertMsg(e.message); }
+}
+
+async function taskMenu(id) {
+  const t = state.tasks.find((x) => x.id === id);
+  if (!t) return;
+  const choice = await ask(`«${t.title}»${t.due ? "\n" + t.due : ""}`,
+    [{id: "done", type: "default", text: "Сделано"}, {id: "cancel", type: "destructive", text: "Удалить"}]);
+  if (choice === "done") completeTask(id, document.querySelector(`[data-task="${id}"]`));
+  if (choice === "cancel") {
+    try { await api(`/api/tasks/${id}/cancel`, {method: "POST"}); haptic("warning"); load(); }
+    catch (e) { alertMsg(e.message); }
+  }
+}
+
+/* ---------- Календарь ---------- */
+function agendaRow(i) {
+  const [a, b] = i.time.includes("–") ? i.time.split("–") : [i.time, ""];
+  const cls = i.kind === "event" ? "ev" : "";
+  const meta = [];
+  if (i.location) meta.push("📍 " + esc(i.location));
+  if (i.kind === "task") meta.push("дело");
+  if (i.recurring) meta.push("🔁");
+  if (i.remind) meta.push("🔔 " + esc(i.remind));
+  return `<div class="row" data-${i.kind}="${i.id}">
+    <div class="time">${a === "Весь день" ? "<b>весь</b>день" : `<b>${esc(a)}</b>${esc(b)}`}</div>
+    <div class="body ${cls}"><div class="title">${esc(i.title)}</div>
+      ${meta.length ? `<div class="meta">${meta.join(" · ")}</div>` : ""}
+      ${i.notes ? `<div class="notes">${esc(i.notes)}</div>` : ""}</div></div>`;
+}
+
+function renderCalendar() {
+  const el = $("#calendar");
+  if (!selectedDay) selectedDay = state.user.today;
+  const periods = state.periods.map((p) => `<div class="period" data-event="${p.id}"><span class="emoji">🌴</span>
+      <div class="body"><div class="title">${esc(p.title)}</div><div class="meta">${esc(p.span)} · ${p.days} ${plural(p.days, "день", "дня", "дней")}${p.now ? " · сейчас" : ""}</div></div></div>`).join("");
+  const strip = state.strip.map((d) => `<button class="day ${d.date === selectedDay ? "on" : ""} ${d.weekend ? "weekend" : ""}" data-day="${d.date}">
+      <small>${d.short}</small><span class="n">${d.num}</span><span class="dot">${"<i></i>".repeat(Math.min(d.count, 3))}</span></button>`).join("");
+  const day = state.days.find((d) => d.date === selectedDay);
+  const title = day ? day.title : (state.strip.find((d) => d.date === selectedDay) ? "" : "");
+  const agenda = day && day.items.length
+    ? `<h2>${esc(day.title)}</h2><div class="card">${day.items.map(agendaRow).join("")}</div>`
+    : `<h2>${esc(dayTitle(selectedDay))}</h2><div class="card"><div class="empty"><span class="big">🌿</span>Свободный день</div></div>`;
+  const later = state.days.filter((d) => d.date > state.strip[state.strip.length - 1].date);
+  const laterHtml = later.length ? `<h2>Дальше</h2><div class="card">${later.map((d) => d.items.map((i) =>
+      agendaRow({...i, time: i.time, title: i.title, notes: null, location: null, remind: null, _day: d.title})
+        .replace('<div class="title">', `<div class="title"><span class="badge">${esc(shortDate(d.date))}</span> `)).join("")).join("")}</div>` : "";
+  const recurring = state.recurring.length ? `<h2>Регулярно</h2><div class="card">${state.recurring.map((r) =>
+      `<div class="row plain" data-event="${r.id}"><div class="body"><div class="title">${esc(r.title)}</div>
+       <div class="meta">🔁 ${esc(r.rule)}, ${esc(r.time)}</div></div></div>`).join("")}</div>` : "";
+  el.innerHTML = periods + `<div class="strip" id="strip">${strip}</div>` + agenda + laterHtml + recurring +
+    `<div class="foot">Добавить событие — напиши боту: «маникюр в субботу в 12».</div>`;
+  const on = el.querySelector(".day.on");
+  if (on) on.scrollIntoView({inline: "nearest", block: "nearest"});
+}
+
+function dayTitle(iso) {
+  if (iso === state.user.today) return "Сегодня";
+  const d = new Date(iso + "T12:00:00");
+  const t = new Date(state.user.today + "T12:00:00"); t.setDate(t.getDate() + 1);
+  if (d.toDateString() === t.toDateString()) return "Завтра";
+  return d.toLocaleDateString("ru-RU", {weekday: "long", day: "numeric", month: "long"}).replace(/^./, (c) => c.toUpperCase());
+}
+function shortDate(iso) { const d = new Date(iso + "T12:00:00"); return d.toLocaleDateString("ru-RU", {day: "numeric", month: "short"}).replace(".", ""); }
+function plural(n, one, few, many) { const a = n % 10, b = n % 100; return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many; }
+
+async function eventMenu(id) {
+  const item = [...state.days.flatMap((d) => d.items), ...state.periods, ...state.recurring].find((i) => i.id === id && (i.kind === "event" || !i.kind));
+  const name = item ? item.title : "событие";
+  const choice = await ask(`Удалить «${name}» из календаря?${item && item.rule ? "\nУдалятся все повторы." : ""}`,
+    [{id: "delete", type: "destructive", text: "Удалить"}]);
+  if (choice === "delete") {
+    try { await api(`/api/events/${id}`, {method: "DELETE"}); haptic("warning"); load(); }
+    catch (e) { alertMsg(e.message); }
+  }
+}
+
+/* ---------- Память ---------- */
+function renderMemory() {
+  const el = $("#memory");
+  const sections = memory.sections.filter((s) => s.items.length);
+  if (!sections.length) {
+    el.innerHTML = `<div class="empty"><span class="big">🧠</span>Пока ничего не знаю о тебе.<br>Скажи боту: «запомни, что я встаю в 7».</div>`;
+    return;
+  }
+  el.innerHTML = sections.map((s) => `<h2>${esc(s.title)}</h2><div class="card">${s.items.map((m) =>
+      `<div class="row" data-memory="${m.number}"><span class="num">${m.number}</span><div class="body"><div class="title">${esc(m.content)}</div>
+       ${m.until ? `<div class="meta">до ${esc(m.until)}</div>` : ""}</div></div>`).join("")}</div>`).join("") +
+    `<div class="foot">${memory.auto ? "Запоминаю важное из разговоров сам." : "Запоминаю только по просьбе."} Нажми на факт, чтобы удалить.</div>`;
+}
+
+async function memoryMenu(number) {
+  const m = memory.sections.flatMap((s) => s.items).find((x) => x.number === number);
+  const choice = await ask(`Забыть факт ${number}?\n«${m ? m.content : ""}»`, [{id: "forget", type: "destructive", text: "Забыть"}]);
+  if (choice === "forget") {
+    try { await api(`/api/memory/${number}`, {method: "DELETE"}); haptic("warning"); loadMemory(); }
+    catch (e) { alertMsg(e.message); }
+  }
+}
+
+/* ---------- общее ---------- */
+function alertMsg(text) { if (tg && tg.showAlert) tg.showAlert(text); else window.alert(text); }
+
+async function load() {
+  try {
+    state = await api("/api/state");
+    $("#hello").textContent = state.user.name ? `Привет, ${state.user.name.split(" ")[0]}!` : "Pim";
+    renderTasks(); renderCalendar();
+  } catch (e) {
+    showError(e.status === 401 ? "Открой Pim из Telegram — через кнопку меню в чате с ботом."
+      : e.status === 403 ? "Сначала напиши боту в Telegram." : "Не получилось загрузить: " + e.message);
+  }
+}
+async function loadMemory() { try { memory = await api("/api/memory"); renderMemory(); } catch (e) { alertMsg(e.message); } }
+
+document.querySelector(".tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-tab]"); if (!b) return;
+  tab = b.dataset.tab;
+  document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+  for (const s of ["tasks", "calendar", "memory"]) $("#" + s).classList.toggle("hidden", s !== tab);
+  if (tab === "memory" && !memory) loadMemory();
+  try { tg.HapticFeedback.selectionChanged(); } catch (err) {}
+});
+
+document.addEventListener("click", (e) => {
+  const done = e.target.closest("[data-done]");
+  if (done) { e.stopPropagation(); completeTask(+done.dataset.done, done.closest(".row")); return; }
+  const day = e.target.closest("[data-day]");
+  if (day) { selectedDay = day.dataset.day; renderCalendar(); try { tg.HapticFeedback.selectionChanged(); } catch (err) {} return; }
+  const task = e.target.closest("[data-task]");
+  if (task) { taskMenu(+task.dataset.task); return; }
+  const ev = e.target.closest("[data-event]");
+  if (ev) { eventMenu(+ev.dataset.event); return; }
+  const mem = e.target.closest("[data-memory]");
+  if (mem) { memoryMenu(+mem.dataset.memory); return; }
+});
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state) { load(); if (memory) loadMemory(); } });
+load();
+</script>
+</body>
+</html>

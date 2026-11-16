@@ -10,7 +10,8 @@ from pim.llm.factory import make_provider
 from pim.memory.reflection import Reflector
 from pim.reminders.scheduler import ReminderScheduler
 from pim.stt.factory import make_transcriber
-from pim.telegram.bot import TelegramNotifier, make_bot, make_dispatcher, setup_commands
+from pim.telegram.bot import TelegramNotifier, make_bot, make_dispatcher, setup_commands, setup_menu_button
+from pim.telegram.cards import remove_cards
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +48,20 @@ async def main() -> None:
     )
 
     background = [asyncio.create_task(scheduler.run_forever())]
+    if settings.webapp_url:
+        from pim.web.api import create_app, serve
+
+        async def task_changed(task_id: int) -> None:
+            await remove_cards(bot, repo, task_id)  # закрыли в Mini App — копии карточки в чате больше не нужны
+
+        app = create_app(repo, settings.telegram_bot_token, on_task_changed=task_changed)
+        background.append(asyncio.create_task(serve(app, settings.web_host, settings.web_port)))
+
+        async def menu_button(bot) -> None:
+            await setup_menu_button(bot, settings.webapp_url)
+
+        dp.startup.register(menu_button)
+        log.info("mini app: %s (API on %s:%s)", settings.webapp_url, settings.web_host, settings.web_port)
     if transcriber is not None:
         # модель грузится (и при первом запуске скачивается) в фоне, бот уже отвечает на текст
         background.append(asyncio.create_task(_warmup(transcriber)))

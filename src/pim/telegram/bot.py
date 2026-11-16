@@ -3,7 +3,7 @@ import logging
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, Message, TelegramObject
+from aiogram.types import BotCommand, MenuButtonWebApp, Message, TelegramObject, WebAppInfo
 
 from pim.agent.agent import Agent
 from pim.config import Settings
@@ -113,6 +113,7 @@ class TelegramNotifier:
 COMMANDS = [
     BotCommand(command="start", description="Начать и посмотреть настройки"),
     BotCommand(command="tasks", description="Список дел"),
+    BotCommand(command="app", description="Открыть Pim: дела, календарь, память"),
     BotCommand(command="calendar", description="Календарь: все события"),
     BotCommand(command="lists", description="Списки: покупки, в поездку…"),
     BotCommand(command="digest", description="План на сегодня"),
@@ -131,6 +132,11 @@ async def setup_commands(bot: Bot) -> None:
     Имя, about и description бота задаются вручную в @BotFather и здесь не трогаются.
     """
     await bot.set_my_commands(COMMANDS)
+
+
+async def setup_menu_button(bot: Bot, webapp_url: str) -> None:
+    """Кнопка «Pim» слева от поля ввода — открывает Mini App (дела, календарь, память)."""
+    await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Pim", web_app=WebAppInfo(url=webapp_url)))
 
 
 def _log_incoming(event: TelegramObject, user) -> None:

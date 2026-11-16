@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "int8"
     whisper_cpu_threads: int = 4
     max_voice_seconds: int = 300
+    # Telegram Mini App (pim/web): публичный HTTPS-адрес; пусто — Mini App и API выключены
+    webapp_url: str = ""
+    web_host: str = "127.0.0.1"  # наружу API выставляет Caddy, сам сервер слушает только локально
+    web_port: int = 8080
 
     database_url: str = "sqlite+aiosqlite:///./pim.db"
     default_timezone: str = "Europe/Moscow"

@@ -5,7 +5,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from pim.core.calendar import Occurrence
+from pim.core.calendar import Occurrence, rrule_text
 from pim.core.models import Event, ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
 from pim.agent.tools import lead_text
@@ -479,27 +479,6 @@ def event_reminder_text(occ: Occurrence, tz: str, now) -> str:
     if occ.event.notes:
         lines.append(html.escape(occ.event.notes))
     return "\n".join(lines)
-
-
-_RRULE_DAYS = {"MO": "пн", "TU": "вт", "WE": "ср", "TH": "чт", "FR": "пт", "SA": "сб", "SU": "вс"}
-
-
-def rrule_text(event: Event, tz: str) -> str:
-    """«по пн», «по пн, ср», «каждый день», «каждый месяц 5-го» — для блока «Регулярно»."""
-    parts = dict(p.split("=", 1) for p in (event.rrule or "").split(";") if "=" in p)
-    start = to_local(event.starts_at, tz)
-    freq, interval = parts.get("FREQ"), int(parts.get("INTERVAL", "1") or 1)
-    if freq == "DAILY":
-        return "каждый день" if interval == 1 else f"раз в {interval} дн."
-    if freq == "WEEKLY":
-        days = [_RRULE_DAYS.get(d[-2:], d) for d in parts.get("BYDAY", "").split(",") if d] \
-            or [WEEKDAYS_RU[start.weekday()]]
-        return ("по " if interval == 1 else f"раз в {interval} нед. по ") + ", ".join(days)
-    if freq == "MONTHLY":
-        return f"каждый месяц {start.day}-го"
-    if freq == "YEARLY":
-        return f"каждый год {start:%d.%m}"
-    return "повторяется"
 
 
 def calendar_text(events: list[Event], tz: str, now) -> str:

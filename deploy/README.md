@@ -46,5 +46,13 @@ scp 'admin@IP:/var/backups/pim/pim-*.db' ~/pim-backups/
 
 ## HTTPS для Mini App
 
-Telegram открывает Mini App только по HTTPS. Caddy получает сертификат сам, нужен домен. Без своего домена
-подойдёт `IP-С-ДЕФИСАМИ.sslip.io` (например, `203-0-113-5.sslip.io`). Caddyfile появится вместе с API.
+Telegram открывает Mini App только по HTTPS. Caddy сам получает и продлевает сертификат, нужен домен; без своего
+подойдёт `IP-С-ДЕФИСАМИ.sslip.io`:
+
+```sh
+sudo apt-get install -y caddy
+echo '203-0-113-5.sslip.io {
+    reverse_proxy 127.0.0.1:8080
+}' | sudo tee /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# в /opt/pim/app/.env: WEBAPP_URL=https://203-0-113-5.sslip.io — и перезапустить pim
+```

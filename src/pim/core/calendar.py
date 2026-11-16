@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from dateutil.rrule import rrulestr
 
 from pim.core.models import Event
+from pim.core.timeutils import WEEKDAYS_RU, to_local
 
 # Дальше этого свободное время для дела не ищем: весь день в встречах — лучше поставить как есть
 MAX_FREE_SEARCH = 12
@@ -92,3 +93,24 @@ def _remind_moment(event: Event, start: datetime, lead: timedelta, tz: str) -> d
         local = moment.astimezone(ZoneInfo(tz))
         moment = local.replace(hour=ALL_DAY_REMIND_HOUR, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     return moment
+
+
+_RRULE_DAYS = {"MO": "пн", "TU": "вт", "WE": "ср", "TH": "чт", "FR": "пт", "SA": "сб", "SU": "вс"}
+
+
+def rrule_text(event: Event, tz: str) -> str:
+    """«по пн», «по пн, ср», «каждый день», «каждый месяц 5-го» — для блока «Регулярно»."""
+    parts = dict(p.split("=", 1) for p in (event.rrule or "").split(";") if "=" in p)
+    start = to_local(event.starts_at, tz)
+    freq, interval = parts.get("FREQ"), int(parts.get("INTERVAL", "1") or 1)
+    if freq == "DAILY":
+        return "каждый день" if interval == 1 else f"раз в {interval} дн."
+    if freq == "WEEKLY":
+        days = [_RRULE_DAYS.get(d[-2:], d) for d in parts.get("BYDAY", "").split(",") if d] \
+            or [WEEKDAYS_RU[start.weekday()]]
+        return ("по " if interval == 1 else f"раз в {interval} нед. по ") + ", ".join(days)
+    if freq == "MONTHLY":
+        return f"каждый месяц {start.day}-го"
+    if freq == "YEARLY":
+        return f"каждый год {start:%d.%m}"
+    return "повторяется"

@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, LinkPreviewOptions, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, LinkPreviewOptions, Message, WebAppInfo
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.chat_action import ChatActionSender
 
 from pim.agent.agent import Agent, ForwardedPart
@@ -278,6 +279,16 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         text, kb = list_card(lst, await repo.list_items(lst.id), lst.id in await repo.shared_list_ids(user.id))
         await cb.message.edit_text(text, reply_markup=kb)
         await cb.answer()
+
+    @router.message(Command("app"))
+    async def open_app(message: Message):
+        if not settings.webapp_url:
+            await message.answer("Приложение пока не подключено.")
+            return
+        kb = InlineKeyboardBuilder()
+        kb.button(text="📱 Открыть Pim", web_app=WebAppInfo(url=settings.webapp_url))
+        await message.answer("Дела, календарь и память — на одном экране. Его же открывает кнопка «Pim» "
+                             "слева от поля ввода.", reply_markup=kb.as_markup())
 
     @router.message(Command("calendar"))
     @router.message(F.text == CALENDAR_BUTTON)
