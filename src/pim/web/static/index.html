@@ -219,14 +219,10 @@ function renderCalendar() {
   const agenda = day && day.items.length
     ? `<h2>${esc(day.title)}</h2><div class="card">${day.items.map(agendaRow).join("")}</div>`
     : `<h2>${esc(dayTitle(selectedDay))}</h2><div class="card"><div class="empty"><span class="big">🌿</span>Свободный день</div></div>`;
-  const later = state.days.filter((d) => d.date > state.strip[state.strip.length - 1].date);
-  const laterHtml = later.length ? `<h2>Дальше</h2><div class="card">${later.map((d) => d.items.map((i) =>
-      agendaRow({...i, time: i.time, title: i.title, notes: null, location: null, remind: null, _day: d.title})
-        .replace('<div class="title">', `<div class="title"><span class="badge">${esc(shortDate(d.date))}</span> `)).join("")).join("")}</div>` : "";
   const recurring = state.recurring.length ? `<h2>Регулярно</h2><div class="card">${state.recurring.map((r) =>
       `<div class="row plain" data-event="${r.id}"><div class="body"><div class="title">${esc(r.title)}</div>
        <div class="meta">🔁 ${esc(r.rule)}, ${esc(r.time)}</div></div></div>`).join("")}</div>` : "";
-  el.innerHTML = periods + `<div class="strip" id="strip">${strip}</div>` + agenda + laterHtml + recurring +
+  el.innerHTML = periods + `<div class="strip" id="strip">${strip}</div>` + agenda + recurring +
     `<div class="foot">Добавить событие — напиши боту: «маникюр в субботу в 12».</div>`;
   const on = el.querySelector(".day.on");
   if (on) on.scrollIntoView({inline: "nearest", block: "nearest"});
@@ -239,7 +235,6 @@ function dayTitle(iso) {
   if (d.toDateString() === t.toDateString()) return "Завтра";
   return d.toLocaleDateString("ru-RU", {weekday: "long", day: "numeric", month: "long"}).replace(/^./, (c) => c.toUpperCase());
 }
-function shortDate(iso) { const d = new Date(iso + "T12:00:00"); return d.toLocaleDateString("ru-RU", {day: "numeric", month: "short"}).replace(".", ""); }
 function plural(n, one, few, many) { const a = n % 10, b = n % 100; return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many; }
 
 async function eventMenu(id) {
