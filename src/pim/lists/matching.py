@@ -28,9 +28,15 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+MAX_NAME = 100
+
+
 def display_name(name: str) -> str:
-    """Как показывать список: без слова «список», с заглавной буквы."""
-    clean = normalize(name) or name.strip()
+    """Как показывать список: имя как дал пользователь («Покупки к отпуску», «Фильмы 2026»), без слова «список»
+    в начале и кавычек, с заглавной буквы."""
+    clean = re.sub(r"\s+", " ", name).strip().strip("«»\"'“”").strip()
+    clean = re.sub(r"^(список|списка|списке|списку)\s+", "", clean, flags=re.IGNORECASE) or clean
+    clean = clean[:MAX_NAME]
     return clean[:1].upper() + clean[1:]
 
 

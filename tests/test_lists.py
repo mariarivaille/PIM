@@ -109,3 +109,31 @@ async def test_list_card_and_menu(repo, user):
     text, kb = lists_menu(await repo.user_lists(user.id))
     assert kb.inline_keyboard[0][0].text == "🛒 Покупки (1)"
     assert lists_menu([])[1] is None
+
+
+def test_display_name_keeps_any_name():
+    assert display_name("покупки к отпуску") == "Покупки к отпуску"
+    assert display_name("«Фильмы: 2026!»") == "Фильмы: 2026!"
+    assert display_name("список  подарков на НГ") == "Подарков на НГ"
+
+
+async def test_rename_list(repo, user):
+    ctx = ToolContext(repo, user)
+    await run_tool(ctx, "add_to_list", {"list": "покупки", "items": "крем от солнца"})
+    await run_tool(ctx, "add_to_list", {"list": "в поездку", "items": "паспорт"})
+    res = await run_tool(ctx, "rename_list", {"list": "список покупок", "new_name": "покупки к отпуску"})
+    assert res["renamed_list"] == {"from": "Покупки", "to": "Покупки к отпуску"}
+    res = await run_tool(ctx, "show_list", {"list": "покупки к отпуску"})
+    assert [i["text"] for i in res["items"]] == ["крем от солнца"]
+    assert (await run_tool(ctx, "show_list", {"list": "покупки"}))["list"] == "Покупки к отпуску"  # по основе слова
+    err = await run_tool(ctx, "rename_list", {"list": "в поездку", "new_name": "Покупки к отпуску"})
+    assert "уже есть" in err["error"]
+
+
+async def test_only_owner_renames_shared_list(repo, user):
+    other = await repo.get_or_create_user(2, 200, TZ)
+    lst = await repo.create_list(other.id, "Покупки")
+    await repo.add_list_member(lst.id, user.id)
+    err = await run_tool(ToolContext(repo, user), "rename_list", {"list": "покупки", "new_name": "Мои"})
+    assert "владелец" in err["error"]
+    assert (await repo.get_list(other.id, lst.id)).name == "Покупки"

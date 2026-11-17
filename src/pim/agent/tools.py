@@ -1073,6 +1073,22 @@ async def show_list(ctx: ToolContext, list: str) -> dict:
     return await _list_view(ctx, await _find_list(ctx, list))
 
 
+async def rename_list(ctx: ToolContext, list: str, new_name: str) -> dict:
+    lst = await _find_list(ctx, list)
+    name = display_name(new_name)
+    if not normalize(name):
+        raise ToolError("new_name пустой — передай новое название списка")
+    others = [l for l, _, _ in await ctx.repo.user_lists(ctx.user.id) if l.id != lst.id]
+    if any(normalize(l.name) == normalize(name) for l in others):
+        raise ToolError(f"список «{name}» уже есть — переименуй в другое название или спроси пользователя")
+    old = lst.name
+    if await ctx.repo.rename_list(ctx.user.id, lst.id, name) is None:
+        raise ToolError("это общий список другого человека — переименовать его может только владелец")
+    lst.name = name
+    await _list_view(ctx, lst)
+    return {"renamed_list": {"from": old, "to": name}}
+
+
 async def delete_list(ctx: ToolContext, list: str) -> dict:
     lst = await _find_list(ctx, list)
     if await ctx.repo.delete_list(ctx.user.id, lst.id) is None:
@@ -1124,8 +1140,9 @@ _RRULE = {
 }
 _ID = {"type": "integer", "description": "id задачи"}
 _LIST = {"type": "string",
-         "description": "Короткое название списка в именительном падеже, без слова «список»: «покупки» "
-                        "(даже если сказали «в список покупок»), «в поездку», «фильмы», «подарки»"}
+         "description": "Название списка в именительном падеже, без слова «список»: «покупки» (даже если сказали "
+                        "«в список покупок»), «в поездку», «покупки к отпуску». Для существующего — как в перечне "
+                        "списков; уточнения из названия («к отпуску», «для дачи») не отбрасывай"}
 # Строка, а не массив: с массивом GigaChat добавляет по одному пункту за вызов (N запросов к модели вместо одного)
 _ITEMS = {"type": "string",
           "description": "ВСЕ пункты из фразы одной строкой через запятую: «молоко, хлеб, яйца»"}
@@ -1298,6 +1315,16 @@ TOOLS: dict[str, tuple[ToolSpec, Handler]] = {
         ToolSpec("show_list", "Показать список целиком («что в покупках?»).",
                  {"type": "object", "properties": {"list": _LIST}, "required": ["list"]}),
         show_list,
+    ),
+    "rename_list": (
+        ToolSpec("rename_list", "Переименовать список: «назови покупки „Покупки к отпуску“». Пункты остаются.",
+                 {"type": "object",
+                  "properties": {"list": _LIST,
+                                 "new_name": {"type": "string",
+                                              "description": "Новое название ровно как сказал пользователь, "
+                                                             "любыми словами, без слова «список»"}},
+                  "required": ["list", "new_name"]}),
+        rename_list,
     ),
     "delete_list": (
         ToolSpec("delete_list", "Удалить список целиком — только если пользователь прямо просит.",

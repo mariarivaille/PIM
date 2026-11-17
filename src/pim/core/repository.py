@@ -301,6 +301,15 @@ class Repository:
             s.add(lst)
         return lst
 
+    async def rename_list(self, user_id: int, list_id: int, name: str) -> ItemList | None:
+        """Переименовать может только владелец: у участника общего списка имя поменялось бы без спроса."""
+        async with self._sm() as s, s.begin():
+            lst = await s.get(ItemList, list_id)
+            if not lst or lst.user_id != user_id:
+                return None
+            lst.name = name
+            return lst
+
     async def delete_list(self, user_id: int, list_id: int) -> ItemList | None:
         """Удалить может только владелец (участник общего списка — нет)."""
         async with self._sm() as s, s.begin():
