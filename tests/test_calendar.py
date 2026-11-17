@@ -150,3 +150,12 @@ async def test_shift_off_busy_time_is_reported(repo, user):
 async def test_my_tasks_has_no_events(repo, user):
     from pim.telegram.keyboards import tasks_text
     assert tasks_text([], TZ) == "Открытых дел нет 🎉"  # события — только в календаре
+
+
+def test_rule_text_until_and_count():
+    from datetime import datetime, timezone
+
+    from pim.core.calendar import rule_text
+    start = datetime(2026, 11, 17, 16, 0, tzinfo=timezone.utc)
+    assert rule_text("FREQ=DAILY;UNTIL=20261127T190000", start, TZ) == "каждый день до 27.11"
+    assert rule_text("FREQ=WEEKLY;BYDAY=MO,WE;COUNT=4", start, TZ) == "по пн, ср, 4 раза"

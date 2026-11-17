@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from dateutil.rrule import rrulestr
 
 from pim.core.models import Event
-from pim.core.timeutils import WEEKDAYS_RU, to_local
+from pim.core.timeutils import WEEKDAYS_RU, plural_ru, to_local
 
 # Дальше этого свободное время для дела не ищем: весь день в встречах — лучше поставить как есть
 MAX_FREE_SEARCH = 12
@@ -100,17 +100,30 @@ _RRULE_DAYS = {"MO": "пн", "TU": "вт", "WE": "ср", "TH": "чт", "FR": "п
 
 def rrule_text(event: Event, tz: str) -> str:
     """«по пн», «по пн, ср», «каждый день», «каждый месяц 5-го» — для блока «Регулярно»."""
-    parts = dict(p.split("=", 1) for p in (event.rrule or "").split(";") if "=" in p)
-    start = to_local(event.starts_at, tz)
+    return rule_text(event.rrule, event.starts_at, tz)
+
+
+def rule_text(rrule: str | None, start: datetime, tz: str) -> str:
+    """Правило повтора по-человечески (у дел и событий): «каждый день до 27.11», «по пн, ср», «5 раз»."""
+    parts = dict(p.split("=", 1) for p in (rrule or "").split(";") if "=" in p)
+    local = to_local(start, tz)
     freq, interval = parts.get("FREQ"), int(parts.get("INTERVAL", "1") or 1)
     if freq == "DAILY":
-        return "каждый день" if interval == 1 else f"раз в {interval} дн."
-    if freq == "WEEKLY":
+        text = "каждый день" if interval == 1 else f"раз в {interval} дн."
+    elif freq == "WEEKLY":
         days = [_RRULE_DAYS.get(d[-2:], d) for d in parts.get("BYDAY", "").split(",") if d] \
-            or [WEEKDAYS_RU[start.weekday()]]
-        return ("по " if interval == 1 else f"раз в {interval} нед. по ") + ", ".join(days)
-    if freq == "MONTHLY":
-        return f"каждый месяц {start.day}-го"
-    if freq == "YEARLY":
-        return f"каждый год {start:%d.%m}"
-    return "повторяется"
+            or [WEEKDAYS_RU[local.weekday()]]
+        text = ("по " if interval == 1 else f"раз в {interval} нед. по ") + ", ".join(days)
+    elif freq == "MONTHLY":
+        text = f"каждый месяц {local.day}-го"
+    elif freq == "YEARLY":
+        text = f"каждый год {local:%d.%m}"
+    else:
+        text = "повторяется"
+    until = parts.get("UNTIL", "")
+    if len(until) >= 8 and until[:8].isdigit():
+        text += f" до {until[6:8]}.{until[4:6]}"
+    elif parts.get("COUNT", "").isdigit():
+        n = int(parts["COUNT"])
+        text += f", {n} {plural_ru(n, 'раз', 'раза', 'раз')}"
+    return text

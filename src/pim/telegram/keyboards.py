@@ -5,7 +5,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from pim.core.calendar import Occurrence, rrule_text
+from pim.core.calendar import Occurrence, rrule_text, rule_text
 from pim.core.models import Event, ItemList, ListItem, Memory, MemoryKind, MemorySource, Task, TaskStatus, utcnow
 from pim.core.timeutils import WEEKDAYS_RU, format_local, humanize_until, plural_ru, to_local
 from pim.agent.tools import lead_text
@@ -186,7 +186,13 @@ def list_card(lst: ItemList, items: list[ListItem], shared: bool = False) -> tup
     if not items:
         text = f"{title}\nПусто — скажи, например: «добавь в {html.escape(lst.name.lower())} …»"
     else:
-        text = f"{title} · отмечено {done} из {len(items)}"
+        left = len(items) - done
+        if not done:
+            text = f"{title} · {left} {plural_ru(left, 'пункт', 'пункта', 'пунктов')}"
+        elif left:
+            text = f"{title} · осталось {left} из {len(items)}"
+        else:
+            text = f"{title} · всё отмечено ✅"
     kb = InlineKeyboardBuilder()
     for item in items[:MAX_LIST_BUTTONS]:
         mark = "✅" if item.done else "☐"
@@ -209,7 +215,7 @@ def lists_menu(lists: list[tuple[ItemList, int, int]], shared: set[int] = frozen
         kb.button(text=f"{_list_icon(lst.name)} {lst.name} ({open_})" + (" 👥" if lst.id in shared else ""),
                   callback_data=ListAction(action="open", list_id=lst.id))
     kb.adjust(1)
-    return "Твои списки (в скобках — сколько не отмечено):", kb.as_markup()
+    return "Твои списки (в скобках — сколько осталось):", kb.as_markup()
 
 
 # Сколько дел показывать карточками в вечернем разборе; остальное — в /tasks
@@ -277,7 +283,7 @@ def task_card(task: Task, tz: str, auto_time: bool = False, show_remind: bool = 
                             else f" {WEEKDAYS_RU[to_local(task.remind_at, tz).weekday()]}")
                          + f" — за {lead_text(task.due_at - task.remind_at)}")
     if task.rrule:
-        parts.append(f"🔁 {html.escape(task.rrule)}")
+        parts.append(f"🔁 {rule_text(task.rrule, task.due_at or task.created_at, tz)}")
     if task.notes:
         parts.append(html.escape(task.notes))
     if auto_time and task.due_at:
@@ -452,7 +458,7 @@ def event_card(event: Event, tz: str) -> str:
     else:
         lines.append(f"🗓 {WEEKDAYS_RU[start.weekday()]} {start:%d.%m}, {_event_time(occ, tz)}")
     if event.rrule:
-        lines.append(f"🔁 {html.escape(event.rrule)}")
+        lines.append(f"🔁 {rrule_text(event, tz)}")
     if event.location:
         lines.append(f"📍 {html.escape(event.location)}")
     if event.notes:

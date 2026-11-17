@@ -103,7 +103,7 @@ async def test_list_card_and_menu(repo, user):
     items = await repo.list_items(lst.id)
     await repo.toggle_item(user.id, items[1].id)
     text, kb = list_card(lst, await repo.list_items(lst.id))
-    assert "отмечено 1 из 2" in text
+    assert "осталось 1 из 2" in text
     assert [row[0].text for row in kb.inline_keyboard] == ["☐ молоко", "✅ хлеб", "🧹 Убрать отмеченные"]
 
     text, kb = lists_menu(await repo.user_lists(user.id))
