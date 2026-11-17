@@ -523,7 +523,7 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         if callback_data.action == "done":
             task = await repo.complete_task(user.id, tid, user.timezone)
             if task and task.status == "open":  # повторяющаяся — перенеслась
-                note = f"✅ Сделано. Следующий раз: {format_local(task.due_at, user.timezone)}"
+                note = "✅ Сделано, следующий раз — в карточке выше"
             else:
                 note = "✅ Сделано"
         elif callback_data.action == "cancel":
@@ -531,11 +531,11 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
             note = "🗑 Удалено"
         elif callback_data.action == "tomorrow":
             task = await postpone_to_tomorrow(repo, user, tid, utcnow())
-            note = f"➡️ Перенёс на {format_local(task.due_at, user.timezone)}" if task else ""
+            note = "➡️ Перенёс на завтра"
         elif callback_data.action == "snooze":
             until = utcnow() + timedelta(minutes=callback_data.minutes)
             task = await repo.snooze_task(user.id, tid, until)
-            note = f"⏰ Напомню {format_local(until, user.timezone)}"
+            note = "⏰ Отложил"
         else:
             task, note = None, ""
 
