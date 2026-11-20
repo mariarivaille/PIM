@@ -68,18 +68,6 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
-  - path: /usr/local/bin/pim-backup
-    permissions: "0755"
-    content: |
-      #!/bin/sh
-      # Ежедневная копия базы (консистентная, через sqlite .backup); хранится 14 дней.
-      # Это копия на том же диске — от удаления сервера не спасает, скачивайте к себе (см. deploy/README.md).
-      set -e
-      mkdir -p /var/backups/pim
-      [ -f /opt/pim/app/pim.db ] || exit 0
-      sqlite3 /opt/pim/app/pim.db ".backup '/var/backups/pim/pim-$(date +%F).db'"
-      find /var/backups/pim -name 'pim-*.db' -mtime +14 -delete
-
   - path: /etc/cron.d/pim-backup
     content: |
       30 3 * * * root /usr/local/bin/pim-backup
@@ -104,5 +92,7 @@ runcmd:
   - sudo -u pim -H git clone --branch dev https://github.com/mariarivaille/PIM.git /opt/pim/app
   - cd /opt/pim/app && sudo -u pim -H uv venv --python 3.11 .venv
   - cd /opt/pim/app && sudo -u pim -H uv pip install --python .venv/bin/python -e .
+  # копия базы: каждую ночь на диск и, если в .env задан BACKUP_CHAT_ID, — файлом в Telegram
+  - install -m 755 /opt/pim/app/deploy/pim-backup.sh /usr/local/bin/pim-backup
   - systemctl daemon-reload
   - systemctl enable pim

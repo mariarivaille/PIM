@@ -37,12 +37,10 @@ ssh admin@IP 'sudo -u pim -H sh -c "cd /opt/pim/app && git pull -q &&
 
 ## Резервные копии
 
-Каждую ночь `/usr/local/bin/pim-backup` кладёт копию базы в `/var/backups/pim` (14 дней). Это тот же диск —
-от удаления сервера не спасает, поэтому время от времени забирать к себе:
-
-```sh
-scp 'admin@IP:/var/backups/pim/pim-*.db' ~/pim-backups/
-```
+Каждую ночь `/usr/local/bin/pim-backup` (`deploy/pim-backup.sh`) кладёт копию базы в `/var/backups/pim` (14 дней).
+Это тот же диск, поэтому если в `.env` задан `BACKUP_CHAT_ID` (свой Telegram id), копия ещё и приходит
+от бота в Telegram файлом `pim-ГГГГ-ММ-ДД.db.gz` — без звука. Восстановить: распаковать (`gunzip`), остановить
+бота и положить файл на место `/opt/pim/app/pim.db` (владелец `pim`, права 600).
 
 ## HTTPS для Mini App
 
