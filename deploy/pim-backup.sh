@@ -3,6 +3,7 @@
 # Если в /opt/pim/app/.env задан BACKUP_CHAT_ID (свой Telegram id), копия ещё и уходит боту в этот чат файлом —
 # так база переживёт удаление сервера. Ставится в /usr/local/bin/pim-backup, запускается cron от root.
 set -e
+umask 077  # в копии — личные данные
 DB=/opt/pim/app/pim.db
 ENV=/opt/pim/app/.env
 DIR=/var/backups/pim
