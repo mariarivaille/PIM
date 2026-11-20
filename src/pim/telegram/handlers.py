@@ -402,7 +402,9 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
             try:
                 audio = await message.bot.download(media)
-                text = await transcriber.transcribe(audio.getvalue())
+                # у кружков (video_note) mime в Telegram нет — это всегда MP4
+                mime = getattr(media, "mime_type", None) or ("video/mp4" if message.video_note else "audio/ogg")
+                text = await transcriber.transcribe(audio.getvalue(), mime)
             except Exception:
                 log.exception("transcription failed")
                 await message.answer("Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")

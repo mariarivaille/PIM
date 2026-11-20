@@ -32,6 +32,8 @@ Pim — личный LLM-ассистент в Telegram (запись дел + �
 - Mini App — `pim/web`: FastAPI в том же процессе, что бот (`main.py`, при заданном `WEBAPP_URL`), та же БД.
   Вход — подпись Telegram initData (`web/auth.py`), пускает только пользователей из БД; все запросы — с `user_id`.
   Подписи дат считает сервер. Фронт — один `web/static/index.html` без сборки, цвета из темы Telegram.
+- Голосовые — `stt/`: по умолчанию мультимодальная модель через OpenRouter (`STT_MODEL`, Gemini Flash Lite —
+  доли цента за минуту, сервер на 1 ГБ RAM); локальный Whisper — опция `.[whisper]` (~1.5 ГБ RAM).
 - Окружение: `.venv` (Python 3.11), тесты `.venv/bin/pytest`.
 
 ## Память и пользователи

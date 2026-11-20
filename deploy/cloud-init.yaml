@@ -62,8 +62,8 @@ write_files:
       Restart=always
       RestartSec=10
       Environment=HOME=/opt/pim
-      # whisper large-v3-turbo занимает ~1.5 ГБ; не даём боту съесть всю память сервера
-      MemoryMax=3G
+      # не даём боту съесть всю память сервера (с локальным whisper поднять до 3G)
+      MemoryMax=1G
 
       [Install]
       WantedBy=multi-user.target
@@ -98,7 +98,7 @@ runcmd:
   - ufw allow 443/tcp
   - ufw --force enable
   - systemctl enable --now fail2ban
-  # uv ставит Python 3.11 рядом с системным (в 26.04 он новее, а колёса faster-whisper есть не для всех версий)
+  # uv ставит Python 3.11 рядом с системным (проект тестируется на 3.11)
   - curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
   - mkdir -p /opt/pim && chown pim:pim /opt/pim && chmod 700 /opt/pim
   - sudo -u pim -H git clone --branch dev https://github.com/mariarivaille/PIM.git /opt/pim/app

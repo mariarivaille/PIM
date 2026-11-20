@@ -11,13 +11,14 @@ dependencies = [
     "openai>=1.50",
     "gigachat>=0.2",
     "python-dateutil>=2.9",
-    "faster-whisper>=1.1",
     "fastapi>=0.115",
     "uvicorn>=0.32",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+# локальное распознавание голосовых (STT_PROVIDER=whisper): ~1.5 ГБ RAM
+whisper = ["faster-whisper>=1.1"]
 
 [project.scripts]
 pim = "pim.main:run"

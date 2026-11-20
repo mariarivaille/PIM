@@ -44,7 +44,7 @@ class WhisperTranscriber:
         log.info("transcribed %.1fs of audio in %.1fs", info.duration, time.monotonic() - started)
         return text
 
-    async def transcribe(self, audio: bytes) -> str:
+    async def transcribe(self, audio: bytes, mime: str | None = None) -> str:
         async with self._lock:
             return await asyncio.to_thread(self._transcribe_sync, audio)
 

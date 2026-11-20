@@ -2,10 +2,10 @@ from typing import Protocol
 
 
 class Transcriber(Protocol):
-    """Распознавание речи. Реализации: локальный Whisper, позже — SaluteSpeech и т.п."""
+    """Распознавание речи. Реализации: модель на OpenRouter (stt/openrouter.py), локальный Whisper."""
 
-    async def transcribe(self, audio: bytes) -> str:
-        """Аудио в любом формате, который понимает реализация (Telegram отдаёт OGG/Opus) -> текст."""
+    async def transcribe(self, audio: bytes, mime: str | None = None) -> str:
+        """Аудио (Telegram отдаёт голосовые в OGG/Opus, кружки — MP4) -> текст. mime — тип файла из Telegram."""
         ...
 
     async def warmup(self) -> None:

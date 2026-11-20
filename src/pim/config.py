@@ -34,8 +34,10 @@ class Settings(BaseSettings):
     gigachat_model: str = "GigaChat-2-Max"
     gigachat_verify_ssl: bool = False
 
-    # Распознавание голосовых: whisper (локально) | none (выключено)
-    stt_provider: Literal["whisper", "none"] = "whisper"
+    # Распознавание голосовых: openrouter (мультимодальная модель, нужен OPENROUTER_API_KEY) | whisper (локально,
+    # ~1.5 ГБ RAM, `pip install -e .[whisper]`) | none (выключено)
+    stt_provider: Literal["openrouter", "whisper", "none"] = "openrouter"
+    stt_model: str = "google/gemini-3.5-flash-lite"
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
