@@ -95,9 +95,14 @@ NO_CREDITS = ("У OpenRouter закончились кредиты, поэтом
               "на openrouter.ai или переключи бота на GigaChat (LLM_PROVIDER=gigachat).")
 
 
+BAD_KEY = ("Ключ OpenRouter не принимается (истёк или отозван), поэтому я сейчас не могу ответить. Нужен новый "
+           "ключ на openrouter.ai/settings/keys — его надо прописать в настройках бота на сервере.")
+
+
 def llm_error_text(error: Exception, default: str) -> str:
-    """402 от OpenRouter — кончились деньги на ключе: это надо сказать прямо, «попробуй ещё раз» не поможет."""
-    return NO_CREDITS if getattr(error, "status_code", None) == 402 else default
+    """402/401 от OpenRouter — кончились деньги или ключ истёк: сказать прямо, «попробуй ещё раз» не поможет."""
+    status = getattr(error, "status_code", None)
+    return NO_CREDITS if status == 402 else BAD_KEY if status == 401 else default
 
 
 def forward_sender(origin, message: Message) -> str:
@@ -405,9 +410,10 @@ def make_router(agent: Agent, repo: Repository, settings: Settings, transcriber:
                 # у кружков (video_note) mime в Telegram нет — это всегда MP4
                 mime = getattr(media, "mime_type", None) or ("video/mp4" if message.video_note else "audio/ogg")
                 text = await transcriber.transcribe(audio.getvalue(), mime)
-            except Exception:
+            except Exception as e:
                 log.exception("transcription failed")
-                await message.answer("Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")
+                await message.answer(llm_error_text(e, "Не получилось распознать голосовое, попробуй ещё раз "
+                                                       "или напиши текстом."))
                 return
         if not text:
             await message.answer("Не расслышал, повтори, пожалуйста.")

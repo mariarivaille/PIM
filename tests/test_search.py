@@ -52,4 +52,5 @@ def test_no_credits_message():
     from types import SimpleNamespace
     from pim.telegram.handlers import llm_error_text
     assert "кредиты" in llm_error_text(SimpleNamespace(status_code=402), "x")
+    assert "Ключ OpenRouter" in llm_error_text(SimpleNamespace(status_code=401), "x")
     assert llm_error_text(ValueError(), "x") == "x"
